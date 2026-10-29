@@ -8,6 +8,7 @@ import type { MetricsPort } from '../ports/metrics';
 import type { Clock, IdGenerator, LoggerPort } from '../ports/system';
 import type { UnitOfWork } from '../ports/unit-of-work';
 import type { PendingReferenceClaim } from '../ports/wager-transaction-repository';
+import { KeyedSerializer } from '../shared/keyed-serializer';
 import { type RetryPolicy, withTransientRetry } from '../shared/transient-retry';
 import type { WagerEvaluator } from './wager-evaluator';
 
@@ -21,6 +22,7 @@ export interface ResolvePendingReferencesDeps {
   retry: RetryPolicy;
   batchSize: number;
   leaseMs: number;
+  walletGate?: KeyedSerializer;
 }
 
 const CAUSATION = 'pending-reference-worker';
@@ -50,7 +52,10 @@ export class ResolvePendingReferencesUseCase {
     const { logger, metrics, retry } = this.deps;
     const log = logger.child({ transactionId: claim.id, walletId: claim.walletId });
     try {
-      await withTransientRetry(() => this.resolve(claim), retry, metrics, 'resolve_pending_reference');
+      const gate = this.deps.walletGate ?? new KeyedSerializer();
+      await gate.run(claim.walletId, () =>
+        withTransientRetry(() => this.resolve(claim), retry, metrics, 'resolve_pending_reference'),
+      );
     } catch (err) {
       if (err instanceof TransientInfrastructureError) {
         // Leave it: the lease expires and the item is retried later.

@@ -8,6 +8,7 @@ import type { EventContext } from '../messaging/integration-event';
 import type { MetricsPort } from '../ports/metrics';
 import type { Clock, FaultInjector, IdGenerator, LoggerPort } from '../ports/system';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work';
+import { KeyedSerializer } from '../shared/keyed-serializer';
 import { type RetryPolicy, withTransientRetry } from '../shared/transient-retry';
 import { computeWagerPayloadHash } from './payload-hash';
 import type { ProcessWagerCommand } from './process-wager-command';
@@ -23,6 +24,8 @@ export interface ProcessWagerDeps {
   logger: LoggerPort;
   faults: FaultInjector;
   retry: RetryPolicy;
+  /** Per-wallet in-process queue shared with the pending-reference worker (optimisation only). */
+  walletGate?: KeyedSerializer;
 }
 
 /**
@@ -41,7 +44,11 @@ export interface ProcessWagerDeps {
  * - events are only written to the outbox — never published before COMMIT.
  */
 export class ProcessWagerTransactionUseCase {
-  constructor(private readonly deps: ProcessWagerDeps) {}
+  private readonly gate: KeyedSerializer;
+
+  constructor(private readonly deps: ProcessWagerDeps) {
+    this.gate = deps.walletGate ?? new KeyedSerializer();
+  }
 
   async execute(cmd: ProcessWagerCommand): Promise<ProcessWagerResult> {
     const startedAt = performance.now();
@@ -50,11 +57,15 @@ export class ProcessWagerTransactionUseCase {
     this.buildTransaction(cmd, payloadHash, this.deps.clock.now());
 
     const sourceLabel = cmd.source.type === 'SQS' ? 'sqs' : 'http';
-    const result = await withTransientRetry(
-      () => this.deps.uow.run((scope) => this.attempt(scope, cmd, payloadHash)),
-      this.deps.retry,
-      this.deps.metrics,
-      'process_wager',
+    // Same-wallet requests queue in-process first (no DB connection held while waiting); the row lock
+    // inside the transaction remains the cross-instance guarantee.
+    const result = await this.gate.run(cmd.walletId, () =>
+      withTransientRetry(
+        () => this.deps.uow.run((scope) => this.attempt(scope, cmd, payloadHash)),
+        this.deps.retry,
+        this.deps.metrics,
+        'process_wager',
+      ),
     );
     this.observe(cmd, result, sourceLabel, performance.now() - startedAt);
     return result;

@@ -29,6 +29,7 @@ import type {
   ProviderIdentityPort,
 } from '../application/ports/system';
 import type { UnitOfWork } from '../application/ports/unit-of-work';
+import { KeyedSerializer } from '../application/shared/keyed-serializer';
 import type { RetryPolicy } from '../application/shared/transient-retry';
 import { GetWagerTransactionQuery } from '../application/wager/get-wager-transaction.query';
 import { ProcessWagerTransactionUseCase } from '../application/wager/process-wager-transaction.use-case';
@@ -117,6 +118,8 @@ class InfrastructureLifecycle implements OnModuleInit, BeforeApplicationShutdown
 export class InfrastructureModule {
   static register(config: AppConfig, rootLogger: Pino, overrides: InfrastructureOverrides = {}): DynamicModule {
     const retry: RetryPolicy = { maxAttempts: config.db.txMaxAttempts };
+    // One per-wallet in-process queue per instance, shared by HTTP/SQS submissions and the pending-reference worker.
+    const walletGate = new KeyedSerializer();
     const providers: Provider[] = [
       { provide: T.APP_CONFIG, useValue: config },
       { provide: T.ROOT_PINO, useValue: rootLogger },
@@ -200,7 +203,18 @@ export class InfrastructureModule {
           metrics: MetricsPort,
           logger: LoggerPort,
           faults: FaultInjector,
-        ) => new ProcessWagerTransactionUseCase({ uow, evaluator, clock, ids, metrics, logger, faults, retry }),
+        ) =>
+          new ProcessWagerTransactionUseCase({
+            uow,
+            evaluator,
+            clock,
+            ids,
+            metrics,
+            logger,
+            faults,
+            retry,
+            walletGate,
+          }),
         inject: [T.UNIT_OF_WORK, WagerEvaluator, T.CLOCK, T.ID_GENERATOR, T.METRICS, T.LOGGER, T.FAULT_INJECTOR],
       },
       {
@@ -223,6 +237,7 @@ export class InfrastructureModule {
             retry,
             batchSize: config.pendingRef.batchSize,
             leaseMs: config.pendingRef.leaseMs,
+            walletGate,
           }),
         inject: [T.UNIT_OF_WORK, WagerEvaluator, T.CLOCK, T.ID_GENERATOR, T.METRICS, T.LOGGER],
       },
