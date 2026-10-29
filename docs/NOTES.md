@@ -55,3 +55,10 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 - Problema encontrado: leitura de fila FIFO sem deletar bloqueia o grupo (mensagens seguintes do mesmo MessageGroupId ficam invisíveis) — `receiveAll(..., { consume: true })` nos testes.
 - `tests/support/app-process.ts` (spawn de `bun src/main.ts`, porta livre, logs em buffer, `kill()`) criado aqui.
 - Verificação: `bun run test:reset && bun run test:integration` → 74 pass / 0 fail.
+
+### Executor — Fase 7 (concorrência)
+- `tests/support/cluster.ts` (`useCluster(label, n)` sobe N processos reais `bun src/main.ts` com pools próprios; `withFailover`), `money-math.ts` (valores esperados em centavos `BigInt` + PRNG determinístico `mulberry32`).
+- 8 cenários em `tests/concurrency/` (11 testes): (1) mesma aposta 50× em 3 instâncias → 1 débito, ≥49 replays na métrica; (2) 20 wallets × duas BETs de 80 em instâncias diferentes → 201+422 por wallet, saldo 20.00, retries viram replay; (3) 20 wallets × 25 operações em paralelo; (4) 3 instâncias completas, 300 ops metade HTTP/metade SQS + 90 duplicatas cruzadas, filas/DLQ/outbox vazios, ≥2 instâncias consumiram; (5) `process.exit(137)` após commit e antes do ack → redelivery vira `DUPLICATE_MESSAGE` em outra instância; (6a) 2 processos publishers sobre 300 eventos → 300 entregues, 0 perdidos/duplicados; (6b) publisher morto após claim → outro publica após o lease; (7) ROLLBACK/REFUND antes da BET (202 → PROCESSED) e corrida reversão×BET em 20 wallets; (8) 400 ops com 2 de 3 instâncias mortas no meio e reiniciadas, 66 requisições refeitas com a mesma key → tudo exatamente uma vez + reconciliação `consistent`.
+- Todos os testes terminam com `assertWalletConsistent` (saldo == soma do ledger, último lançamento, cadeia, nº de lançamentos == nº de transações que movem saldo).
+- Windows: `proc.kill('SIGKILL')` = TerminateProcess (equivale a crash); `process.exit(137)` preserva o código 137. SIGTERM real é demonstrado no container (Fase 8) e testado via `app.close()`.
+- Verificação: `bun run test:concurrency` 3× seguidas → 11 pass / 0 fail em cada (≈56 s).
