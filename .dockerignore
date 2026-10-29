@@ -1,0 +1,9 @@
+node_modules
+.git
+tests
+docs
+.agents
+.aider-desk
+load-results
+*.log
+.env
