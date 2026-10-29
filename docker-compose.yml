@@ -17,6 +17,7 @@ x-app: &app
     AUTH_ENABLED: ${AUTH_ENABLED:-false}
     AUTH_ISSUER: http://localhost:8080/realms/wagering
     AUTH_JWKS_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/certs
+    AUTH_AUDIENCE: ${AUTH_AUDIENCE:-wagering-api}
   depends_on:
     postgres: { condition: service_healthy }
     localstack: { condition: service_healthy }
