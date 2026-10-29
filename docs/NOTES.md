@@ -44,3 +44,8 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 - Desvios: adicionado `@types/express@5.0.3` (dev) — tipos de `Request/Response`; `http-metrics.middleware.ts` (histograma HTTP por rota-template) e `observability/queue-depth.ts` (gauge de profundidade das filas). Rota inexistente → 404 `ROUTE_NOT_FOUND` no corpo padrão; JSON malformado → 400 `VALIDATION_ERROR`.
 - No Windows, `curl localhost` às vezes não resolve para o listener do Bun — usar `127.0.0.1`.
 - Verificação manual: `bun run start` → `/health/ready` 200, `POST /wallets` 201, BET 201/replay 200, `/metrics` com `wagering_*`, mensagem SQS de exemplo processada. Testes: `create-wallet`, `http-api`, `business-rules`, `idempotency` (inclui cruzado HTTP↔SQS e replay de PENDING_REFERENCE), `reconciliation` → 36 pass.
+
+### Executor — Fase 5 (consumer SQS)
+- Testes: `sqs-consumer.test.ts` (processamento + inbox, redelivery do mesmo messageId com dedup ids diferentes → 1 efeito, mesmo negócio com outro messageId → replay, poison → DLQ imediata com `errorCode`, rejeição de negócio/wallet inexistente → ack, falha transitória injetada → retries com `ApproximateReceiveCount` crescente e redrive para DLQ após 3), `graceful-shutdown.test.ts` (`app.close()` durante a 1ª mensagem: ela commita e é ackada; as 2 não iniciadas voltam visíveis em < 3 s com visibility timeout de 20 s; outra instância processa), unit de `message-classifier` e schemas.
+- Desvio: `bunfig.toml` removido — Bun 1.4.4 ignorou `[test] timeout` (testes caíam em 5 s); timeouts agora via `--timeout` nos scripts e por teste.
+- Verificação: 7 pass (integração) + 34 pass (unit interface).

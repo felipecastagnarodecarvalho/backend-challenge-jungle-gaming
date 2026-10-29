@@ -14,7 +14,7 @@
     "db:migrate:status": "bun src/infrastructure/persistence/migrate-cli.ts status",
     "sqs:setup": "bun scripts/setup-queues.ts",
     "test:reset": "bun scripts/reset-test-db.ts",
-    "test:unit": "bun test tests/unit",
+    "test:unit": "bun test tests/unit --timeout 20000",
     "test:integration": "bun test tests/integration --timeout 60000",
     "test:concurrency": "bun test tests/concurrency --timeout 180000",
     "test": "bun run test:unit && bun run test:reset && bun run test:integration && bun run test:concurrency",
