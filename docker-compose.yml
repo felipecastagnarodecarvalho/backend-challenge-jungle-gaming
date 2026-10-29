@@ -1,5 +1,33 @@
 name: wagering
 
+x-app: &app
+  build: .
+  image: wagering-app:local
+  init: true
+  stop_grace_period: 30s
+  environment: &app-env
+    NODE_ENV: production
+    PORT: "3000"
+    LOG_LEVEL: info
+    DATABASE_URL: postgresql://wagering:wagering@postgres:5432/wagering
+    AWS_ENDPOINT_URL: http://localstack:4566
+    AWS_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: test
+    AWS_SECRET_ACCESS_KEY: test
+    AUTH_ENABLED: ${AUTH_ENABLED:-false}
+    AUTH_ISSUER: http://localhost:8080/realms/wagering
+    AUTH_JWKS_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/certs
+  depends_on:
+    postgres: { condition: service_healthy }
+    localstack: { condition: service_healthy }
+    migrate: { condition: service_completed_successfully }
+    sqs-init: { condition: service_completed_successfully }
+  healthcheck:
+    test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:3000/health/ready');process.exit(r.ok?0:1)"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -24,6 +52,48 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
+
+  # One-shot: versioned SQL migrations.
+  migrate:
+    <<: *app
+    command: ["bun", "src/infrastructure/persistence/migrate-cli.ts", "up"]
+    depends_on: { postgres: { condition: service_healthy } }
+    healthcheck: { disable: true }
+    restart: "no"
+
+  # One-shot: FIFO queues (main + DLQ with redrive + events).
+  sqs-init:
+    <<: *app
+    command: ["bun", "scripts/setup-queues.ts"]
+    depends_on: { localstack: { condition: service_healthy } }
+    healthcheck: { disable: true }
+    restart: "no"
+
+  app-1:
+    <<: *app
+    ports: ["3001:3000"]
+    environment: { <<: *app-env, INSTANCE_ID: app-1 }
+  app-2:
+    <<: *app
+    ports: ["3002:3000"]
+    environment: { <<: *app-env, INSTANCE_ID: app-2 }
+  app-3:
+    <<: *app
+    ports: ["3003:3000"]
+    environment: { <<: *app-env, INSTANCE_ID: app-3 }
+
+  # Optional external IdP (docker compose --profile auth up -d). Realm imported from docker/keycloak.
+  keycloak:
+    profiles: ["auth"]
+    image: quay.io/keycloak/keycloak:26.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: http://localhost:8080
+      KC_HEALTH_ENABLED: "true"
+    ports: ["8080:8080"]
+    volumes: ["./docker/keycloak:/opt/keycloak/data/import:ro"]
 
 volumes:
   pgdata:

@@ -62,3 +62,7 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 - Todos os testes terminam com `assertWalletConsistent` (saldo == soma do ledger, último lançamento, cadeia, nº de lançamentos == nº de transações que movem saldo).
 - Windows: `proc.kill('SIGKILL')` = TerminateProcess (equivale a crash); `process.exit(137)` preserva o código 137. SIGTERM real é demonstrado no container (Fase 8) e testado via `app.close()`.
 - Verificação: `bun run test:concurrency` 3× seguidas → 11 pass / 0 fail em cada (≈56 s).
+
+### Executor — Fase 8 (Docker)
+- `Dockerfile` (`oven/bun:1.4.4`, `bun install --frozen-lockfile --production`, roda TS direto, `USER bun`, `STOPSIGNAL SIGTERM`, CMD em exec form) e compose completo (`migrate` e `sqs-init` one-shot, `app-1..3` em 3001–3003 com `init: true`, `stop_grace_period: 30s`, healthcheck em `/health/ready`, `keycloak` no profile `auth`).
+- Verificação: `docker compose up -d --build` → migrate/sqs-init `Exited (0)`, 3 apps `healthy`; wallet criada em 3001 e BETs aceitas em 3001/3002/3003 sobre a mesma wallet (saldo 70.00, version 4); `docker compose stop app-2` → log `sqs consumer stopped` e saída em ~1 s com código 143 (Nest executa os hooks e re-emite o SIGTERM); `docker compose up -d app-2` volta `healthy`.
