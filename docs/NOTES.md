@@ -49,3 +49,9 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 - Testes: `sqs-consumer.test.ts` (processamento + inbox, redelivery do mesmo messageId com dedup ids diferentes → 1 efeito, mesmo negócio com outro messageId → replay, poison → DLQ imediata com `errorCode`, rejeição de negócio/wallet inexistente → ack, falha transitória injetada → retries com `ApproximateReceiveCount` crescente e redrive para DLQ após 3), `graceful-shutdown.test.ts` (`app.close()` durante a 1ª mensagem: ela commita e é ackada; as 2 não iniciadas voltam visíveis em < 3 s com visibility timeout de 20 s; outra instância processa), unit de `message-classifier` e schemas.
 - Desvio: `bunfig.toml` removido — Bun 1.4.4 ignorou `[test] timeout` (testes caíam em 5 s); timeouts agora via `--timeout` nos scripts e por teste.
 - Verificação: 7 pass (integração) + 34 pass (unit interface).
+
+### Executor — Fase 6 (outbox publisher + worker PENDING_REFERENCE)
+- Testes: `outbox-publisher.test.ts` (envelope/atributos/dedup id = eventId; fila de eventos inexistente → `attempts` e `next_attempt_at` crescem, nada se perde, depois publica; **dois publishers** concorrentes sobre 200 eventos → 200 entregues, 0 perdidos, 0 duplicados), `pending-reference.test.ts` (ROLLBACK antes do BET → 202 → resolvido; REFUND sem BET → `REFERENCE_NOT_FOUND` após 3 tentativas + evento; cadeia BET←WIN←ROLLBACK fora de ordem converge), `restart-recovery.test.ts` (processo filho com publisher/worker desligados é morto; novo processo drena outbox e resolve pendências), unit do caminho FAILED do worker.
+- Problema encontrado: leitura de fila FIFO sem deletar bloqueia o grupo (mensagens seguintes do mesmo MessageGroupId ficam invisíveis) — `receiveAll(..., { consume: true })` nos testes.
+- `tests/support/app-process.ts` (spawn de `bun src/main.ts`, porta livre, logs em buffer, `kill()`) criado aqui.
+- Verificação: `bun run test:reset && bun run test:integration` → 74 pass / 0 fail.

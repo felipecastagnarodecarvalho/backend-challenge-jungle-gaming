@@ -1,4 +1,5 @@
 import {
+  DeleteMessageBatchCommand,
   DeleteQueueCommand,
   GetQueueAttributesCommand,
   type Message,
@@ -121,10 +122,14 @@ export async function queueDepth(url: string): Promise<{ visible: number; inflig
   return { visible, inflight, total: visible + inflight };
 }
 
-/** Drains a queue (receive + no delete) until `idleRounds` consecutive empty receives. */
+/**
+ * Reads a queue until `idleRounds` consecutive empty receives.
+ * `consume: true` deletes what it reads — required to see *all* messages of a
+ * FIFO group (a group stays blocked while earlier messages are in flight).
+ */
 export async function receiveAll(
   url: string,
-  opts: { idleRounds?: number; visibilityTimeout?: number } = {},
+  opts: { idleRounds?: number; visibilityTimeout?: number; consume?: boolean } = {},
 ): Promise<Message[]> {
   const out: Message[] = [];
   let idle = 0;
@@ -144,6 +149,14 @@ export async function receiveAll(
     else {
       idle = 0;
       out.push(...msgs);
+      if (opts.consume) {
+        await sqs.send(
+          new DeleteMessageBatchCommand({
+            QueueUrl: url,
+            Entries: msgs.map((m, i) => ({ Id: String(i), ReceiptHandle: m.ReceiptHandle })),
+          }),
+        );
+      }
     }
   }
   return out;
