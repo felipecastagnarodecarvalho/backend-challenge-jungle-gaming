@@ -29,3 +29,11 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 - Desvios: portas de Clock/IdGenerator/MessagePublisher/Logger/ProviderIdentity/FaultInjector agrupadas em `application/ports/system.ts` (arquivos minúsculos); `InboxRepository.tryReceive` devolve também o hash existente (para logar messageId reutilizado com corpo diferente). `findByIdForUpdate` usa `disableIdentityMap` + `refresh` (cada leitura vem do banco; nunca do identity map). `insertIfAbsent` e claims usam SQL nativo com `?`; `markPublished` usa `nativeUpdate` com `$in` (evita expansão de array em placeholder).
 - Erros do cliente `Bun.SQL` expõem o SQLSTATE em `errno` (não `code`) — usado nos testes.
 - Verificação: ciclo `db:migrate` → `status` → `down` ×3 → `up` → `down --all` → `up` OK; `migrations.test.ts` + `constraints.test.ts` + classifier → 46 pass.
+
+### Executor — Fase 3 (aplicação)
+- `transient-retry`, `WagerEvaluator` (compartilhado entre submissão e worker; modo `insert`/`resolve`), `ProcessWagerTransactionUseCase`, `ResolvePendingReferencesUseCase`, `CreateWalletUseCase`, queries, `LedgerCursor`, `ReconcileWalletUseCase`, `PublishOutboxBatchUseCase`; `SystemClock`/`UuidV7IdGenerator` antecipados.
+- Use case valida o comando (domínio) **antes** de abrir a transação: comando inválido nunca toca o inbox (SQS → poison/DLQ).
+- `wallet_version` do worker na expiração: `reject({countAttempt:true})` registra a última tentativa.
+- Fakes em memória (`tests/support/fakes.ts`) com rollback por snapshot — só em unit tests.
+- Verificado que `findOne(..., { lockMode: PESSIMISTIC_WRITE })` emite `select … for update`.
+- Verificação: unit 171 pass; `process-wager.atomicity.test.ts` (falha injetada após ledger / no outbox → nada persiste; sem falha → tudo junto) 2 pass.
