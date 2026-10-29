@@ -10,6 +10,7 @@ Serviço financeiro distribuído que processa transações de apostas (`BET → 
   - [`docs/DESIGN.md`](docs/DESIGN.md): design detalhado que guiou a implementação.
   - [`docs/CHALLENGE.md`](docs/CHALLENGE.md): enunciado original.
   - [`docs/NOTES.md`](docs/NOTES.md): diário de execução, fase a fase, com os desvios do design.
+  - [`docs/GLOSARY.md`](docs/GLOSARY.md): glossário de termos, siglas e códigos usados no projeto.
 
 ---
 

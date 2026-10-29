@@ -91,3 +91,6 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 - Sondas próprias no compose (scripts no scratchpad, fora do repo): corrida 2×80 em 30 wallets nas 3 instâncias (0 anomalias), 50× a mesma BET (1 débito), mesma key com wallets diferentes (sem 5xx), ~20 entradas inválidas de `Money` rejeitadas.
 - Nenhuma falha eliminatória. Nota estimada **92/100** + diferenciais (carga e auth).
 - Must-fix: **F1** UUID em maiúsculas → `WALLET_PLAYER_MISMATCH`/falso 409 (normalizar antes do hash); **F2** saldo > 999.999.999.999.999,99 é commitado e depois a wallet trava em 500 (mapper reidrata com `Money.from`; alinhar com `NUMERIC(20,2)` e impor teto); **F3** (com auth) idempotency key global permite squatting e vazamento entre providers.
+
+## Glossário
+- Criado `docs/GLOSARY.md` (~150 verbetes em 13 seções: domínio, finanças, arquitetura, Postgres, concorrência, idempotência, mensageria, HTTP, auth, observabilidade, testes, stack, códigos de falha) e linkado no README.
