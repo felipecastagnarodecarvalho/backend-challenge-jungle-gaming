@@ -23,3 +23,9 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 - Adições pequenas ao design: `Money.fromSigned` (reidratar somas negativas internas, ex. reconciliação); `reject({ countAttempt })` para contar a última tentativa na expiração de PENDING_REFERENCE; `OutboxMessage.scheduleRetry(now, error?, backoff?)` guarda `lastError`. Em `REFERENCE_MISMATCH` não ligamos `referenceTransactionId` a transações de outra wallet.
 - Vetor do hash (§8.2) confere: `6ff120b6…8974`.
 - Verificação: `bun run test:unit` → 124 pass; typecheck/lint limpos.
+
+### Executor — Fase 2 (persistência)
+- 3 migrations SQL (exatamente o SQL de §6.8), `migrate-cli` (`up`, `down [--to name|--all]`, `status`), `orm.ts`, EntitySchemas (records planos), mappers (um arquivo `mappers.ts` em vez de 5), 5 repositórios, `MikroUnitOfWork`, `pg-error-classifier`, `scripts/reset-test-db.ts`, `config.ts` (antecipado da Fase 4 porque ORM/CLI precisam).
+- Desvios: portas de Clock/IdGenerator/MessagePublisher/Logger/ProviderIdentity/FaultInjector agrupadas em `application/ports/system.ts` (arquivos minúsculos); `InboxRepository.tryReceive` devolve também o hash existente (para logar messageId reutilizado com corpo diferente). `findByIdForUpdate` usa `disableIdentityMap` + `refresh` (cada leitura vem do banco; nunca do identity map). `insertIfAbsent` e claims usam SQL nativo com `?`; `markPublished` usa `nativeUpdate` com `$in` (evita expansão de array em placeholder).
+- Erros do cliente `Bun.SQL` expõem o SQLSTATE em `errno` (não `code`) — usado nos testes.
+- Verificação: ciclo `db:migrate` → `status` → `down` ×3 → `up` → `down --all` → `up` OK; `migrations.test.ts` + `constraints.test.ts` + classifier → 46 pass.
