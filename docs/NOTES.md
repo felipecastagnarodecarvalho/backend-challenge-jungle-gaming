@@ -37,3 +37,10 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 - Fakes em memória (`tests/support/fakes.ts`) com rollback por snapshot — só em unit tests.
 - Verificado que `findOne(..., { lockMode: PESSIMISTIC_WRITE })` emite `select … for update`.
 - Verificação: unit 171 pass; `process-wager.atomicity.test.ts` (falha injetada após ledger / no outbox → nada persiste; sem falha → tudo junto) 2 pass.
+
+### Executor — Fase 4 (HTTP + Nest + observabilidade)
+- `bootstrap/*` (AppModule, createApp, tokens, readiness), `InfrastructureModule` (todos os adapters e use cases via `useFactory`, `@Inject` explícito em tudo), pino + nestjs-pino (JSON, redaction de campos monetários/payload), prom-client (`/metrics`, gauges com `collect()` assíncrono e timeout), health (DB `SELECT 1` + `GetQueueAttributes`), read models SQL (valores `numeric` castados para `text` no SQL), guard global + `@Public()`, filtro de exceções único, controllers.
+- Para o `AppModule` compilar, consumer SQS, workers, `sqs-client`, `queue-registry`, `queue-provisioner`, `sqs-message-publisher` e `setup-queues`/`send-sample-message` foram escritos já nesta fase (testes deles nas Fases 5/6).
+- Desvios: adicionado `@types/express@5.0.3` (dev) — tipos de `Request/Response`; `http-metrics.middleware.ts` (histograma HTTP por rota-template) e `observability/queue-depth.ts` (gauge de profundidade das filas). Rota inexistente → 404 `ROUTE_NOT_FOUND` no corpo padrão; JSON malformado → 400 `VALIDATION_ERROR`.
+- No Windows, `curl localhost` às vezes não resolve para o listener do Bun — usar `127.0.0.1`.
+- Verificação manual: `bun run start` → `/health/ready` 200, `POST /wallets` 201, BET 201/replay 200, `/metrics` com `wagering_*`, mensagem SQS de exemplo processada. Testes: `create-wallet`, `http-api`, `business-rules`, `idempotency` (inclui cruzado HTTP↔SQS e replay de PENDING_REFERENCE), `reconciliation` → 36 pass.

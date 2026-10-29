@@ -1,0 +1,23 @@
+/** DI tokens for ports (interfaces vanish at runtime, so they need explicit tokens). */
+export const APP_CONFIG = Symbol('APP_CONFIG');
+export const MIKRO_ORM = Symbol('MIKRO_ORM');
+export const UNIT_OF_WORK = Symbol('UNIT_OF_WORK');
+export const READ_MODELS = Symbol('READ_MODELS');
+export const WALLET_READ_MODEL = Symbol('WALLET_READ_MODEL');
+export const LEDGER_READ_MODEL = Symbol('LEDGER_READ_MODEL');
+export const WAGER_TX_READ_MODEL = Symbol('WAGER_TX_READ_MODEL');
+export const RECONCILIATION_READ_MODEL = Symbol('RECONCILIATION_READ_MODEL');
+export const GAUGES_READ_MODEL = Symbol('GAUGES_READ_MODEL');
+export const MESSAGE_PUBLISHER = Symbol('MESSAGE_PUBLISHER');
+export const CLOCK = Symbol('CLOCK');
+export const ID_GENERATOR = Symbol('ID_GENERATOR');
+export const METRICS = Symbol('METRICS');
+export const LOGGER = Symbol('LOGGER');
+export const ROOT_PINO = Symbol('ROOT_PINO');
+export const PROVIDER_IDENTITY = Symbol('PROVIDER_IDENTITY');
+export const SQS_CLIENT = Symbol('SQS_CLIENT');
+export const QUEUE_REGISTRY = Symbol('QUEUE_REGISTRY');
+export const FAULT_INJECTOR = Symbol('FAULT_INJECTOR');
+export const HEALTH_CHECKER = Symbol('HEALTH_CHECKER');
+export const READINESS_STATE = Symbol('READINESS_STATE');
+export const RETRY_POLICY = Symbol('RETRY_POLICY');
