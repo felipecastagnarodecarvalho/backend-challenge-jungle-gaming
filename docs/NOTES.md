@@ -84,3 +84,10 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 - `ARCHITECTURE.md` (PT-BR) com decisões e justificativas (ORM, Money, estratégia transacional, concorrência, idempotência/hash, inbox/outbox/SQS, PENDING_REFERENCE, failure codes e HTTP, máquina de estados, garantias no schema, auth, observabilidade, testes), trade-offs/limitações e interpretações — refletindo o que foi construído (incl. `KeyedSerializer` e números do teste de carga).
 - Desvio: `ARCHITECTURE.md` fica na **raiz** (o enunciado o cita ao lado do `README.md`), não em `docs/` como sugeria o design.
 - Verificação final (compose de pé): `bun run lint` e `bun run typecheck` limpos; `bun run test` executado **2× seguidas**: unit 223/223, integração 76/76 (14 arquivos), concorrência 11/11 (8 cenários) — sem falhas intermitentes. (Na Fase 7 a suíte de concorrência já tinha rodado 3× seguidas.)
+
+### Revisor — auditoria de conformidade
+- Relatório completo em `docs/REVIEW.md` (checklist §2–14 com evidências `arquivo:linha`, nota estimada, achados por severidade e must-fix).
+- Reexecutado: `typecheck` e `lint` limpos; unit 223/223, integração 76/76, concorrência 11/11; compose com 3 apps `healthy` e `/health/ready` 200.
+- Sondas próprias no compose (scripts no scratchpad, fora do repo): corrida 2×80 em 30 wallets nas 3 instâncias (0 anomalias), 50× a mesma BET (1 débito), mesma key com wallets diferentes (sem 5xx), ~20 entradas inválidas de `Money` rejeitadas.
+- Nenhuma falha eliminatória. Nota estimada **92/100** + diferenciais (carga e auth).
+- Must-fix: **F1** UUID em maiúsculas → `WALLET_PLAYER_MISMATCH`/falso 409 (normalizar antes do hash); **F2** saldo > 999.999.999.999.999,99 é commitado e depois a wallet trava em 500 (mapper reidrata com `Money.from`; alinhar com `NUMERIC(20,2)` e impor teto); **F3** (com auth) idempotency key global permite squatting e vazamento entre providers.
