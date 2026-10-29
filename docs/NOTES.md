@@ -120,3 +120,6 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
   - `receiveAll` dos testes podia entrar em loop quando havia muitas mensagens com visibility curta na DLQ; agora rodadas só com mensagens já vistas contam como ociosas;
   - `String.replace` com `$$` corrompeu o SQL em um script de edição; corrigido.
 - Verificação: lint/typecheck limpos; unit **243/243**; reset + integração **90/90** (2 execuções completas verdes, mais uma parcial); concorrência **11/11**.
+
+## Collection Postman
+- `postman/wagering-api.postman_collection.json` + environment local (baseUrl `http://localhost:3001`). 7 pastas com asserções; pastas 0–5 validadas com Newman contra o compose (29 requests, 39 asserções, 0 falhas; saldo final 1025.00 conforme esperado). Seção "Postman" adicionada ao README.

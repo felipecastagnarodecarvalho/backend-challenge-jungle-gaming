@@ -113,6 +113,28 @@ curl -s http://127.0.0.1:3001/wallets/<id> -H "Authorization: Bearer $TOKEN"
 
 ---
 
+## Postman
+
+Com o stack no ar (`docker compose up -d`), a API responde em **http://localhost:3001** (instâncias 2 e 3 em `3002` e `3003`, mesmo banco).
+
+1. No Postman: **Import** → selecione os dois arquivos de [`postman/`](postman/):
+   - `wagering-api.postman_collection.json`
+   - `wagering-local.postman_environment.json`
+2. Selecione o environment **Wagering — local (docker compose)**.
+3. Rode as pastas **em ordem** (ou a collection inteira no *Collection Runner*). "Criar wallet" gera um `playerId` novo a cada execução e salva `walletId`; os requests seguintes reaproveitam essas variáveis e já trazem asserções.
+
+| Pasta | O que demonstra |
+|---|---|
+| 0. Saúde e métricas | `/health/live`, `/health/ready`, `/metrics` |
+| 1. Wallets | criação com OPENING, duplicada → 409, consulta |
+| 2. Transações | BET, replay idempotente (200), mesma key com payload diferente (409), WIN, LOSS, consultas |
+| 3. Reversões | REFUND, segundo REFUND → `ALREADY_REVERSED`, ROLLBACK antes da referência → 202 e resolução pelo worker |
+| 4. Ledger e reconciliação | paginação por cursor e reconciliação consistente |
+| 5. Cenários de erro | `INSUFFICIENT_FUNDS`, `CURRENCY_MISMATCH`, valor inválido, header ausente, wallet/transação inexistente |
+| 6. Autenticação | token do Keycloak (só com o profile `auth`); quando `accessToken` está preenchido, a collection envia `Authorization: Bearer` em tudo |
+
+Pela linha de comando: `npx newman run postman/wagering-api.postman_collection.json -e postman/wagering-local.postman_environment.json --folder "0. Saúde e métricas (públicos)" ...` (as pastas 0–5 rodam sem auth).
+
 ## API — exemplos
 
 Todas as respostas trazem `X-Correlation-Id`, que é ecoado se você enviar um. Os erros seguem um corpo único:
