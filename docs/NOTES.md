@@ -16,3 +16,10 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 - `git mv README.md docs/CHALLENGE.md`; README provisório; `package.json` (versões exatas de §3.1), `tsconfig.json`, `biome.json`, `bunfig.toml`, `.gitattributes`, `.dockerignore`, `.env.example`, init SQL do banco de teste, compose parcial (postgres + localstack).
 - Desvios: `biome.json` liga `unsafeParameterDecoratorsEnabled` (decorators de parâmetro do Nest) e desliga `style/useImportType` (import type apagaria classes usadas como token/metadata do Nest) e `complexity/noStaticOnlyClass` (`WagerPolicy` é estático por design). Imagem `oven/bun:1` local já é 1.4.4.
 - Verificação: compose `postgres`/`localstack` healthy; `bun run typecheck` e `bun run lint` limpos.
+
+### Executor — Fase 1 (domínio)
+- `src/domain/**` completo (Money, Wallet, WalletLedgerEntry, WagerTransaction + máquina de estados, WagerPolicy, ReferenceRetryPolicy, FailureCode) e `application/messaging/*`, `canonical-json`, `payload-hash`.
+- `WalletLedgerEntry` faz `Object.freeze(this)`: imutabilidade estrutural também em runtime (atribuição lança `TypeError`).
+- Adições pequenas ao design: `Money.fromSigned` (reidratar somas negativas internas, ex. reconciliação); `reject({ countAttempt })` para contar a última tentativa na expiração de PENDING_REFERENCE; `OutboxMessage.scheduleRetry(now, error?, backoff?)` guarda `lastError`. Em `REFERENCE_MISMATCH` não ligamos `referenceTransactionId` a transações de outra wallet.
+- Vetor do hash (§8.2) confere: `6ff120b6…8974`.
+- Verificação: `bun run test:unit` → 124 pass; typecheck/lint limpos.
