@@ -6,10 +6,11 @@ import { GetWalletQuery } from '../../../application/wallet/get-wallet.query';
 import { GetWalletLedgerQuery } from '../../../application/wallet/get-wallet-ledger.query';
 import { ReconcileWalletUseCase } from '../../../application/wallet/reconcile-wallet.use-case';
 import { moneySchema } from '../../shared/money.schema';
+import { uuidSchema } from '../../shared/uuid.schema';
 import { correlationIdOf } from '../correlation-id.middleware';
 import { parseOrThrow, ZodValidationPipe } from '../zod-validation.pipe';
 
-const createWalletSchema = z.object({ playerId: z.uuid(), initialBalance: moneySchema });
+const createWalletSchema = z.object({ playerId: uuidSchema, initialBalance: moneySchema });
 const ledgerQuerySchema = z.object({
   cursor: z.string().min(1).max(512).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -35,12 +36,12 @@ export class WalletsController {
 
   @Get(':walletId')
   get(@Param('walletId') walletId: string) {
-    return this.getWallet.execute(parseOrThrow(z.uuid(), walletId, 'walletId'));
+    return this.getWallet.execute(parseOrThrow(uuidSchema, walletId, 'walletId'));
   }
 
   @Get(':walletId/ledger')
   ledger(@Param('walletId') walletId: string, @Query() query: Record<string, unknown>) {
-    const id = parseOrThrow(z.uuid(), walletId, 'walletId');
+    const id = parseOrThrow(uuidSchema, walletId, 'walletId');
     const q = parseOrThrow(ledgerQuerySchema, query, '');
     return this.getLedger.execute(id, q.cursor, q.limit);
   }
@@ -49,6 +50,6 @@ export class WalletsController {
   @Post(':walletId/reconciliation')
   @HttpCode(200)
   reconciliation(@Param('walletId') walletId: string) {
-    return this.reconcile.execute(parseOrThrow(z.uuid(), walletId, 'walletId'));
+    return this.reconcile.execute(parseOrThrow(uuidSchema, walletId, 'walletId'));
   }
 }

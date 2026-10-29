@@ -76,4 +76,34 @@ describe('authentication enabled', () => {
       (await http('GET', `${ctx.url}/providers/provider-a/wagering/transactions/x`, undefined, auth(b))).status,
     ).toBe(403);
   });
+
+  test('idempotency keys are per provider: provider-b cannot squat provider-a keys nor learn its ids', async () => {
+    const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
+    const a = await tokenFor('provider-a');
+    const b = await tokenFor('provider-b');
+    const w = (
+      await http<{ id: string; playerId: string }>(
+        'POST',
+        `${ctx.url}/wallets`,
+        { playerId: crypto.randomUUID(), initialBalance: { amount: '100.00', currency: 'BRL' } },
+        auth(a),
+      )
+    ).body;
+    const aOp = wager(w);
+    const key = `provider-a:${aOp.externalTransactionId}`; // the default key provider-a will use
+
+    // provider-b grabs that key first for its own operation: allowed, but only within provider-b's scope
+    const squat = await postWager(ctx.url, wager(w, { providerId: 'provider-b' }), key, auth(b));
+    expect(squat.status).toBe(201);
+
+    // provider-a's legitimate request is not blocked (no 409) and gets its own transaction
+    const legit = await postWager(ctx.url, aOp, key, auth(a));
+    expect(legit.status).toBe(201);
+    expect(legit.body.transactionId).not.toBe(squat.body.transactionId);
+
+    // provider-b reusing the key with another payload conflicts only with its own transaction
+    const conflict = await postWager(ctx.url, wager(w, { providerId: 'provider-b' }), key, auth(b));
+    expect(conflict.status).toBe(409);
+    expect(conflict.body).toMatchObject({ error: { details: { existingTransactionId: squat.body.transactionId } } });
+  });
 });

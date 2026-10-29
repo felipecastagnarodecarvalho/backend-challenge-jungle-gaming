@@ -50,6 +50,13 @@ graph TD
 - A entrada é validada por regex antes de construir o `Decimal`: `^(0|[1-9][0-9]{0,14})\.[0-9]{2}$`. Isso rejeita `NaN`, `Infinity`, `1e3`, `-1.00`, `1.005`, `25`, `01.00`, espaços e números JSON. A moeda segue `^[A-Z]{3}$`.
 - Nenhuma operação arredonda: somas e subtrações de valores com escala 2 continuam com escala 2. Um `-0` serializa como `"0.00"`.
 - `Money.fromSigned` existe só para reconstruir valores internos negativos, como a diferença da reconciliação. Não é contrato de entrada.
+- **Reidratação ≠ contrato de entrada.** Valores lidos do banco usam `Money.fromPersisted`, que aceita todo o intervalo de `NUMERIC(20,2)` (até 18 dígitos inteiros). Antes da revisão o mapper usava `Money.from`, e uma wallet com saldo acima de 15 dígitos ficava presa em 500 para sempre.
+- **Teto de saldo** = `999.999.999.999.999,99`, o mesmo limite do contrato de entrada (`Money.max`):
+  - `WagerPolicy` rejeita qualquer crédito (WIN, REFUND ou ROLLBACK de BET) que passaria do teto como `BALANCE_LIMIT_EXCEEDED`. É uma rejeição REJECTED auditável, com evento, em vez de deixar o banco estourar;
+  - `Wallet.credit` e `Wallet.open` recusam o mesmo caso de forma defensiva;
+  - no banco, a migration 5 adiciona o trigger `wallets_enforce_ceiling`, que impede *elevar* um saldo acima do teto, e o CHECK `ledger_balance_ceiling_ck` em lançamentos CREDIT (`NOT VALID`);
+  - linhas antigas acima do teto (possíveis num banco vivo, como a deixada pela sonda da revisão) não bloqueiam a migration e a wallet continua utilizável: carrega, aceita débitos e rejeita créditos.
+- O SQLSTATE `22003` (`numeric_value_out_of_range`) é classificado como erro de integridade permanente, e não mais como erro desconhecido.
 - O modelo é multi-moeda (a unicidade da wallet é `(player_id, currency)`, e há FK composta `(wallet_id, currency)` no ledger). Os testes usam BRL e cobrem o conflito de moeda.
 
 ## 4. Estratégia transacional
@@ -95,13 +102,15 @@ Ou tudo é confirmado junto, ou nada é: o teste `process-wager.atomicity.test.t
 
 ## 6. Idempotência
 
-- **Persistente e no banco:** `UNIQUE(idempotency_key)` e `UNIQUE(provider_id, external_transaction_id)` em `wager_transactions`. Nenhum cache em memória participa.
+- **Persistente e no banco, escopada por provider:** `UNIQUE(provider_id, idempotency_key)` (migration 4, que substitui o `UNIQUE(idempotency_key)` global) e `UNIQUE(provider_id, external_transaction_id)` em `wager_transactions`. Nenhum cache em memória participa.
+- **Por que por provider:** com uma key global, o provider B podia *ocupar* a key que o A ainda ia usar (a padrão recomendada é `"{providerId}:{externalTransactionId}"`), e o A receberia 409 para sempre. B também podia descobrir ids de transações do A pelo `existingTransactionId` do 409. Agora a busca de idempotência filtra por `provider_id`, então um conflito só aponta para transações do próprio provider.
+- **UUIDs canônicos:** `playerId` e `walletId` (e os ids de rota) são normalizados para minúsculas na borda (schemas zod de HTTP, SQS e `POST /wallets`) e de novo no use case, como rede de segurança, **antes** do hash e da policy. O Postgres sempre devolve `uuid` em minúsculas: sem a normalização, o mesmo id em outra caixa virava `WALLET_PLAYER_MISMATCH`, `REFERENCE_MISMATCH` ou um falso `409 PAYLOAD_MISMATCH`.
 - **Fluxo:** a busca por key **ou** por (provider, externalId) acontece **depois** do lock da wallet.
   - Achou uma linha com a mesma key e o mesmo `payloadHash` → **replay**: devolve o resultado gravado, incluindo o saldo observado naquele momento (`result_balance_amount`/`result_wallet_version`).
   - Mesma key com hash diferente → `409 IDEMPOTENCY_CONFLICT` (`PAYLOAD_MISMATCH`).
   - externalId ligado a outra key → `409 EXTERNAL_ID_BOUND_TO_OTHER_KEY`.
   - key e externalId apontando para transações diferentes → `409 KEY_AND_EXTERNAL_ID_MISMATCH`.
-- **Corrida residual:** a mesma key com `walletId`s diferentes trava wallets diferentes. O `INSERT … ON CONFLICT DO NOTHING` devolve 0 linhas → `IdempotencyRaceError` → rollback e nova tentativa, que vira replay ou conflito determinístico.
+- **Corrida residual:** a mesma key com `walletId`s diferentes trava wallets diferentes. O `INSERT … ON CONFLICT (provider_id, idempotency_key) DO NOTHING` devolve 0 linhas → `IdempotencyRaceError` → rollback e nova tentativa, que vira replay ou conflito determinístico. O alvo do `ON CONFLICT` é explícito, para não engolir outras constraints únicas. Uma corrida em `(provider_id, external_transaction_id)` aparece como `UniqueViolationError`, que só é repetida para as constraints de idempotência, reversão e inbox.
 - **`payloadHash`** = `hex(sha256(utf8(canonicalJson(campos))))`, sobre **exatamente 9 campos de negócio**: `providerId, externalTransactionId, playerId, walletId, roundId, gameId, kind, money{amount,currency}, referenceExternalTransactionId` (ausente ≡ `null`).
   - `canonicalJson` ordena as chaves por code unit, não usa espaços e mantém os arrays na ordem.
   - Header, `idempotencyKey`, `messageId`, `correlationId` e timestamps **não** entram no hash.
@@ -124,7 +133,10 @@ Ou tudo é confirmado junto, ou nada é: o teste `process-wager.atomicity.test.t
 |---|---|
 | resultado de negócio (processada, rejeitada, pendente, conflito, wallet inexistente, duplicata) | **ack** |
 | JSON ou schema inválido (`ValidationError`) | **poison**: envio explícito para a DLQ com `errorCode`/`errorMessage`, depois ack |
-| transitório ou desconhecido | **retry**: `ChangeMessageVisibility` com backoff `base·2^(n−1)`; depois de `maxReceiveCount` (5) o **redrive** do SQS move para a DLQ |
+| erro **deterministicamente permanente**: `IntegrityViolationError` (CHECK, FK ou trigger, por exemplo uma wallet corrompida), `ConcurrencyInvariantError`, `DomainError` | **DLQ imediata** (`reason=permanent_error`, `errorCode` = código do erro). Tudo isso roda sob o lock da wallet, então repetir a mesma mensagem reproduz a mesma falha e só seguraria o grupo FIFO |
+| transitório ou desconhecido (incluindo violação única fora das corridas conhecidas, que pode ser corrida) | **retry**: `ChangeMessageVisibility` com backoff `base·2^(n−1)`; depois de `maxReceiveCount` (5) o **redrive** do SQS move para a DLQ |
+
+- **Heartbeat de visibilidade:** enquanto uma mensagem está em processamento (inclusive esperando na fila em memória da hot wallet), o consumer estende a visibilidade a cada `visibility/2` (no mínimo a cada 1 s). Sem isso, uma mensagem válida reaparecia para outra instância, o `ApproximateReceiveCount` subia e o redrive podia mandá-la para a DLQ. O heartbeat para quando a mensagem é liquidada ou liberada no shutdown. Se ele falhar, a redelivery continua segura, porque o inbox deduplica.
 
 - **SIGTERM:**
   1. `/health/ready` passa a responder 503;
@@ -171,6 +183,7 @@ Ou tudo é confirmado junto, ou nada é: o teste `process-wager.atomicity.test.t
 | `REFERENCE_NOT_PROCESSED` | REJECTED | referência REJECTED/FAILED | desistir |
 | `ALREADY_REVERSED` | REJECTED | referência já revertida | desistir (já revertido) |
 | `AMOUNT_MISMATCH` | REJECTED | valor da reversão ≠ valor da referência | corrigir payload |
+| `BALANCE_LIMIT_EXCEEDED` | REJECTED | crédito (WIN, REFUND ou ROLLBACK de BET) levaria o saldo acima de 999.999.999.999.999,99 | intervenção operacional |
 | `PROCESSING_ERROR` | FAILED | erro permanente inesperado no worker | contato operacional |
 | `WALLET_NOT_FOUND` | (não persistido) | `walletId` inexistente | corrigir payload |
 
@@ -216,12 +229,14 @@ stateDiagram-v2
 |---|---|
 | 1 wallet por player + moeda | `wallets_player_currency_uk` |
 | saldo ≥ 0 | `wallets_balance_non_negative_ck`, `ledger_balances_non_negative_ck` |
-| idempotência | `wager_tx_idempotency_key_uk`, `wager_tx_provider_external_uk` |
+| idempotência (por provider) | `wager_tx_provider_idempotency_key_uk` (migration 4), `wager_tx_provider_external_uk` |
 | ≤ 1 lançamento por transação e wallet | `ledger_wallet_transaction_uk` |
 | aritmética do lançamento | `ledger_arithmetic_ck` |
 | ledger imutável | triggers `ledger_forbid_update_delete`, `ledger_forbid_truncate` |
-| ledger encadeado / sem lost update | `ledger_wallet_version_uk` + trigger `ledger_enforce_chain` |
-| saldo ⇔ ledger | constraint trigger **diferido** `wallets_ledger_backed` |
+| ledger encadeado / sem lost update | `ledger_wallet_version_uk` + trigger `ledger_enforce_chain` (versões contíguas desde a migration 5) |
+| saldo ⇒ ledger | constraint trigger **diferido** `wallets_ledger_backed` |
+| ledger ⇒ saldo: só para transação PROCESSED que move saldo (não LOSS), e a wallet tem de ter avançado até aquela versão | constraint trigger **diferido** `ledger_backed_by_wallet` (migration 5) |
+| teto de saldo (nunca *elevar* acima de 999.999.999.999.999,99) | trigger `wallets_enforce_ceiling` + CHECK `ledger_balance_ceiling_ck` (`NOT VALID`) |
 | `version` muda só com o saldo, sempre +1 | trigger `wallets_guard_update` |
 | lançamento na moeda da wallet e da mesma transação/wallet | FKs compostas `(wallet_id, currency)` e `(transaction_id, wallet_id)` |
 | reversão única | índice único parcial `wager_tx_single_reversal_uk` |
@@ -261,8 +276,8 @@ Cada linha tem um caso negativo em `tests/integration/constraints.test.ts`, que 
 
 | Suíte | O que cobre | Infra |
 |---|---|---|
-| `test:unit` (223) | Money, Wallet, ledger, máquina de estados, WagerPolicy (todas as regras e precedência), hash canônico com vetor, eventos, outbox/inbox, retry, cursor, classificador SQL e SQS, schemas, guard de auth, regra de camadas, fila por wallet | nenhuma (fakes em memória só aqui) |
-| `test:integration` (76) | migrations up/down/up, todas as constraints, atomicidade, HTTP completo, regras de negócio ponta a ponta, idempotência (inclusive cruzada HTTP↔SQS), consumer (redelivery, DLQ, redrive), graceful shutdown, publishers concorrentes, pendências, restart, reconciliação, auth | Postgres + LocalStack reais |
+| `test:unit` (243) | Money, Wallet, ledger, máquina de estados, WagerPolicy (todas as regras e precedência), hash canônico com vetor, eventos, outbox/inbox, retry, cursor, classificador SQL e SQS, schemas, guard de auth, regra de camadas, fila por wallet, teto de saldo e reidratação, normalização de UUID, idempotência por provider, heartbeat | nenhuma (fakes em memória só aqui) |
+| `test:integration` (90) | migrations up/down/up, todas as constraints, atomicidade, HTTP completo, regras de negócio ponta a ponta, idempotência (inclusive cruzada HTTP↔SQS), consumer (redelivery, DLQ, redrive), graceful shutdown, publishers concorrentes, pendências, restart, reconciliação, auth, UUID em maiúsculas, teto de saldo (inclusive wallet legada acima do teto), key por provider, guardas novas do schema, heartbeat de visibilidade, DLQ imediata para erro permanente | Postgres + LocalStack reais |
 | `test:concurrency` (11) | os 8 cenários obrigatórios com **processos reais** (até 3 instâncias simultâneas + kills) | Postgres + LocalStack reais |
 
 - **Determinismo:** nada de `sleep` fixo para asserções (`waitFor` com polling), cargas geradas com PRNG semeado, filas únicas por arquivo, wallets novas por teste (sem `TRUNCATE`, já que o ledger proíbe). As três suítes rodaram várias vezes seguidas sem falha intermitente.
@@ -285,6 +300,11 @@ Cada linha tem um caso negativo em `tests/integration/constraints.test.ts`, que 
 13. **Ledger single-entry por wallet,** encadeado por versão. Double-entry (diferencial opcional) não foi implementado.
 14. **Windows:** os testes simulam crash com término forçado de processo (equivalente a SIGKILL) e com `process.exit(137)` injetado. O SIGTERM real é demonstrado no container (`docker compose stop`), e o comportamento de shutdown é testado via `app.close()`, que executa os mesmos hooks.
 15. **O throughput SQS medido (~57 msg/s) reflete o LocalStack** e o ack individual por mensagem. `DeleteMessageBatch` seria a primeira otimização.
+16. **Resultados de negócio sem linha de transação (`WALLET_NOT_FOUND`, `IDEMPOTENCY_CONFLICT`) recebidos via SQS** são ackados e ficam só em log e métrica. Não publicamos evento para eles: não há agregado persistido para ancorá-lo. O provedor que integra só por fila não recebe o motivo. Próximo passo: um evento `WagerTransactionRejected` sem `transactionId`, pelo outbox. Item F4 da revisão, *conscientemente não implementado*.
+17. **Sem *backpressure* na hot wallet** (item F9 da revisão): a fila em memória não tem limite e o HTTP não tem timeout. O heartbeat evita que mensagens SQS válidas caiam na DLQ por espera, mas a latência da hot wallet continua sem teto. Ver item 2.
+18. **Inbox por `(consumer, messageId)` é global entre providers:** dois providers que reutilizem o mesmo `messageId` colidem, e o segundo vira `DUPLICATE_MESSAGE`. É aceitável porque a fila é canal interno confiável (§2 do desafio) e os produtores geram ids únicos. Em ambiente multi-tenant real, o `messageId` seria prefixado pelo provider.
+19. **Ceiling `NOT VALID`:** se houver linhas antigas acima do teto, `VALIDATE CONSTRAINT` só passa depois de uma ação operacional (debitar ou dividir o saldo). Não há rotina automática para isso.
+20. **Down da migration 4** falha de propósito se dois providers já compartilharem uma key, porque esse estado não é representável no schema antigo.
 
 ## 16. Interpretações de regras adotadas
 
@@ -297,3 +317,6 @@ Cada linha tem um caso negativo em `tests/integration/constraints.test.ts`, que 
 - A `version` da wallet é 1 na criação (o lançamento OPENING também é a versão 1) e sobe 1 a cada lançamento.
 - `FAILED` só é produzido pelo worker de pendências em erro permanente inesperado. Erros transitórios nunca viram FAILED: ficam em retry ou vão para a DLQ.
 - Uma referência de **outra wallet** é rejeitada como `REFERENCE_MISMATCH` sem gravar o vínculo (`reference_transaction_id`), para não ligar transações de wallets diferentes.
+- UUIDs são comparados sem distinção de caixa (canonicalizados para minúsculas); `externalTransactionId`, `roundId`, `gameId` e a idempotency key são strings opacas e **sensíveis** à caixa.
+- A idempotency key vale **por provider**: a mesma string usada por dois providers identifica duas operações independentes.
+- Um crédito acima do teto é rejeição de negócio (`BALANCE_LIMIT_EXCEEDED`), não erro de validação: depende do saldo atual, não só do payload.

@@ -41,12 +41,13 @@ const INSERT_COLUMNS: Array<[keyof WagerTransactionRecord, string]> = [
 
 const INSERT_SQL = `INSERT INTO wager_transactions (${INSERT_COLUMNS.map(([, c]) => c).join(', ')})
 VALUES (${INSERT_COLUMNS.map(() => '?').join(', ')})
-ON CONFLICT DO NOTHING
+ON CONFLICT (provider_id, idempotency_key) DO NOTHING
 RETURNING id`;
 
 export class MikroWagerTransactionRepository implements WagerTransactionRepository {
   constructor(private readonly em: EntityManager) {}
 
+  /** Provider-scoped: another provider's transactions are never matched (no squatting, no id leakage). */
   async findForIdempotency(
     idempotencyKey: string,
     providerId: string,
@@ -54,7 +55,7 @@ export class MikroWagerTransactionRepository implements WagerTransactionReposito
   ): Promise<WagerTransaction[]> {
     const records = await this.em.find(
       WagerTransactionSchema,
-      { $or: [{ idempotencyKey }, { providerId, externalTransactionId: externalId }] },
+      { providerId, $or: [{ idempotencyKey }, { externalTransactionId: externalId }] },
       { disableIdentityMap: true },
     );
     return records.map(WagerTransactionMapper.toDomain);
@@ -88,10 +89,12 @@ export class MikroWagerTransactionRepository implements WagerTransactionReposito
   }
 
   /**
-   * `ON CONFLICT DO NOTHING` (any unique constraint): returns false instead of
-   * aborting the transaction when another transaction already owns the
-   * idempotency key or (provider, externalId). The caller turns that into a
-   * retry, which then resolves as replay/conflict.
+   * `ON CONFLICT (provider_id, idempotency_key) DO NOTHING`: returns false
+   * instead of aborting when a concurrent transaction already owns the key.
+   * The target is explicit so no other unique constraint is silently
+   * swallowed; a (provider, externalId) race surfaces as UniqueViolationError,
+   * which the retry policy also treats as a known race. Either way the next
+   * attempt resolves as replay/conflict.
    */
   async insertIfAbsent(tx: WagerTransaction): Promise<boolean> {
     const record = WagerTransactionMapper.toRecord(tx);

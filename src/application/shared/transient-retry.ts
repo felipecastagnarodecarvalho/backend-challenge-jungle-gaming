@@ -23,7 +23,7 @@ export interface RetryPolicy {
  */
 const RACE_CONSTRAINTS = new Set([
   'wager_tx_single_reversal_uk',
-  'wager_tx_idempotency_key_uk',
+  'wager_tx_provider_idempotency_key_uk',
   'wager_tx_provider_external_uk',
   'inbox_messages_pk',
 ]);

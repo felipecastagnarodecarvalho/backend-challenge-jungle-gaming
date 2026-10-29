@@ -132,6 +132,7 @@ export async function receiveAll(
   opts: { idleRounds?: number; visibilityTimeout?: number; consume?: boolean } = {},
 ): Promise<Message[]> {
   const out: Message[] = [];
+  const seen = new Set<string>();
   let idle = 0;
   while (idle < (opts.idleRounds ?? 2)) {
     const r = await sqs.send(
@@ -144,7 +145,9 @@ export async function receiveAll(
         MessageSystemAttributeNames: ['All'],
       }),
     );
-    const msgs = r.Messages ?? [];
+    // Only unseen messages count: with a short visibility the same messages reappear, which must not loop forever.
+    const msgs = (r.Messages ?? []).filter((m) => !seen.has(m.MessageId ?? ''));
+    for (const m of msgs) seen.add(m.MessageId ?? '');
     if (msgs.length === 0) idle++;
     else {
       idle = 0;

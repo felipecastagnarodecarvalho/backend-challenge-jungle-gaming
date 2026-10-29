@@ -94,3 +94,29 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 
 ## Glossário
 - Criado `docs/GLOSARY.md` (~150 verbetes em 13 seções: domínio, finanças, arquitetura, Postgres, concorrência, idempotência, mensageria, HTTP, auth, observabilidade, testes, stack, códigos de falha) e linkado no README.
+
+### Executor — Correções da revisão (`docs/REVIEW.md`, nota estimada 92/100)
+- **F1 (UUID em maiúsculas):** `uuidSchema` (zod `z.uuid().transform(toLowerCase)`) para `playerId`/`walletId` em HTTP e SQS, em `POST /wallets` e nos ids de rota; normalização repetida nos use cases como rede de segurança. Isso acontece **antes** do hash e da policy. Testes: unit (hash idêntico para diferença só de caixa; SQS normalizado; use case com ids maiúsculos dá replay e não conflito) e integração (wallet criada com `playerId` maiúsculo aceita BET em qualquer caixa, replay cruzado de caixa, reversão com caixa mista, GETs, wallet duplicada detectada sem distinguir caixa).
+- **F2 (saldo grande):**
+  - `Money.fromPersisted` (intervalo inteiro de `NUMERIC(20,2)`) passou a ser usado na reidratação, no lugar do contrato de entrada;
+  - teto `Money.max` = 999999999999999.99: `Wallet.canCredit`/`credit` e `Wallet.open`;
+  - a `WagerPolicy` rejeita créditos acima do teto com o novo `failureCode` **`BALANCE_LIMIT_EXCEEDED`** (REJECTED, auditável, com evento);
+  - SQLSTATE `22003` passou a ser classificado como integridade permanente;
+  - no banco (migration 5): trigger `wallets_enforce_ceiling` (impede *elevar* o saldo acima do teto, mas permite débitos) e CHECK `ledger_balance_ceiling_ck` em créditos, `NOT VALID`.
+  - **Problema encontrado:** a sonda do revisor tinha deixado no banco de dev uma wallet com 1999999999999999.98. Um CHECK simples, mesmo `NOT VALID`, quebrava débitos nela (o CHECK vale para UPDATE). Por isso a regra virou "nunca elevar acima do teto", via trigger.
+  - Verificado ao vivo: aquela wallet (antes presa em 500) agora aceita BET (201), rejeita WIN (422 `BALANCE_LIMIT_EXCEEDED`) e reconcilia.
+  - Testes: unit (limites, policy, mapper com saldo de 16 dígitos) e integração (teto via HTTP, wallet legada acima do teto plantada com `session_replication_role=replica`, guardas do schema).
+- **F3 (key por provider):**
+  - migration 4 nova: `UNIQUE(provider_id, idempotency_key)` no lugar do global, com down reversível;
+  - a busca de idempotência filtra por provider, então o 409 nunca expõe transação de outro provider.
+  - Testes: unit (fakes), constraints e `auth.test.ts` (provider-b não ocupa a key padrão do provider-a; o conflito aponta só para a transação do próprio provider).
+- **F8:** `ON CONFLICT (provider_id, idempotency_key) DO NOTHING`, com alvo explícito; os retries continuam restritos às constraints de idempotência, reversão e inbox.
+- **F5 (heartbeat de visibilidade):** o consumer estende a visibilidade a cada `visibility/2` durante o processamento e para ao liquidar ou liberar a mensagem. Teste de integração com 2 instâncias: a mensagem leva ≥ 5 s com visibility de 2 s e a outra instância nunca a recebe.
+- **F6:** `IntegrityViolationError`, `ConcurrencyInvariantError` e `DomainError` vão direto para a DLQ (`reason=permanent_error`, `errorCode`), porque são determinísticos sob o lock da wallet. Unique violation fora das corridas conhecidas continua em retry, pois pode ser corrida. Teste: wallet corrompida → DLQ na 1ª entrega, com `errorCode=INTEGRITY_VIOLATION`.
+- **F7:** migration 5 com a cadeia do ledger exigindo versões contíguas e o constraint trigger diferido `ledger_backed_by_wallet` (lançamento só para transação PROCESSED que não seja LOSS, e a wallet precisa ter alcançado a versão). Testes em `constraints.test.ts`.
+- **Não implementados, documentados em ARCHITECTURE §15:** F4 (evento para `WALLET_NOT_FOUND`/conflito via SQS) e F9 (backpressure da hot wallet). Também registrados: inbox global entre providers, ceiling `NOT VALID` e down da migration 4.
+- **Incidentes da execução:**
+  - `bun run db:migrate:down` executado duas vezes no banco de **dev** enquanto as migrations 4/5 ainda falhavam (`allOrNothing`) reverteu as migrations 3 e 2 desse banco; foi restaurado com `db:migrate`, e outbox/inbox do dev foram perdidos (dados de carga, sem importância);
+  - `receiveAll` dos testes podia entrar em loop quando havia muitas mensagens com visibility curta na DLQ; agora rodadas só com mensagens já vistas contam como ociosas;
+  - `String.replace` com `$$` corrompeu o SQL em um script de edição; corrigido.
+- Verificação: lint/typecheck limpos; unit **243/243**; reset + integração **90/90** (2 execuções completas verdes, mais uma parcial); concorrência **11/11**.

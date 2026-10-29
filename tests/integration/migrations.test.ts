@@ -43,6 +43,8 @@ describe('migrations', () => {
         'Migration20261029000001CoreTables',
         'Migration20261029000002IntegrityTriggers',
         'Migration20261029000003Messaging',
+        'Migration20261030000004ProviderScopedIdempotency',
+        'Migration20261030000005BalanceCeilingAndLedgerGuards',
       ]);
 
       const afterUp = await inventory(sql);
@@ -59,7 +61,7 @@ describe('migrations', () => {
       expect(afterUp.indexes).toEqual(
         expect.arrayContaining([
           'wallets_player_currency_uk',
-          'wager_tx_idempotency_key_uk',
+          'wager_tx_provider_idempotency_key_uk',
           'wager_tx_provider_external_uk',
           'wager_tx_single_reversal_uk',
           'wager_tx_pending_reference_due_ix',
@@ -78,11 +80,12 @@ describe('migrations', () => {
           'wallets_forbid_delete',
           'wallets_ledger_backed',
           'wager_tx_guard',
+          'ledger_backed_by_wallet',
         ]),
       );
 
       // Down one by one until nothing is left.
-      for (let i = 0; i < 3; i++) await orm.migrator.down();
+      for (let i = 0; i < 5; i++) await orm.migrator.down();
       const afterDown = await inventory(sql);
       expect(afterDown.tables).toEqual(['mikro_orm_migrations']);
       expect(afterDown.triggers).toEqual([]);
@@ -90,7 +93,7 @@ describe('migrations', () => {
       expect(await orm.migrator.getExecuted()).toEqual([]);
 
       const reapplied = await orm.migrator.up();
-      expect(reapplied).toHaveLength(3);
+      expect(reapplied).toHaveLength(5);
       expect((await inventory(sql)).tables).toEqual(afterUp.tables);
     } finally {
       await sql.close();

@@ -109,7 +109,7 @@ export class InMemoryUnitOfWork implements UnitOfWork {
       transactions: {
         findForIdempotency: async (key, provider, ext) =>
           [...s.transactions.values()]
-            .filter((t) => t.idempotencyKey === key || (t.providerId === provider && t.externalTransactionId === ext))
+            .filter((t) => t.providerId === provider && (t.idempotencyKey === key || t.externalTransactionId === ext))
             .map(cloneTx),
         findByProviderExternalId: async (provider, ext) => {
           const t = [...s.transactions.values()].find(
@@ -128,8 +128,8 @@ export class InMemoryUnitOfWork implements UnitOfWork {
         insertIfAbsent: async (tx) => {
           const clash = [...s.transactions.values()].some(
             (t) =>
-              t.idempotencyKey === tx.idempotencyKey ||
-              (t.providerId === tx.providerId && t.externalTransactionId === tx.externalTransactionId),
+              t.providerId === tx.providerId &&
+              (t.idempotencyKey === tx.idempotencyKey || t.externalTransactionId === tx.externalTransactionId),
           );
           if (clash) return false;
           s.transactions.set(tx.id, cloneTx(tx));

@@ -1,7 +1,7 @@
 import { LedgerDirection } from '../ledger/ledger-direction';
 import { WalletLedgerEntry } from '../ledger/wallet-ledger-entry';
 import { CurrencyMismatchError, Money } from '../money/money';
-import { InsufficientFundsError, InvalidWalletError } from './wallet.errors';
+import { BalanceLimitExceededError, InsufficientFundsError, InvalidWalletError } from './wallet.errors';
 
 export interface WalletState {
   id: string;
@@ -24,7 +24,7 @@ export interface WalletMovement {
  * Aggregate root for a player's balance in one currency.
  *
  * Invariants:
- * - balance is never negative;
+ * - balance is never negative and never above Money.max (the supported ceiling);
  * - the only way to change `_balance` is {@link debit}/{@link credit}, each of
  *   which returns the matching {@link WalletLedgerEntry} — "every balance
  *   change has a ledger line" holds structurally;
@@ -56,6 +56,9 @@ export class Wallet {
     const { initialBalance, at } = props;
     if (initialBalance.isNegative()) {
       throw new InvalidWalletError('initial balance must not be negative');
+    }
+    if (Money.max(initialBalance.currency).isLessThan(initialBalance)) {
+      throw new InvalidWalletError('initial balance exceeds the supported maximum');
     }
     const wallet = new Wallet(props.id, props.playerId, initialBalance.currency, initialBalance, 1, at, at);
     if (initialBalance.isZero()) {
@@ -117,8 +120,18 @@ export class Wallet {
     return this.apply(LedgerDirection.Debit, p);
   }
 
+  /** True when crediting `money` keeps the balance within the supported ceiling. */
+  canCredit(money: Money): boolean {
+    this.assertSameCurrency(money);
+    return !Money.max(this.currency).isLessThan(this._balance.add(money));
+  }
+
+  /** Credits `money`. Throws BalanceLimitExceededError (defensive: the policy decides first). */
   credit(p: WalletMovement): WalletLedgerEntry {
     this.assertMovement(p.money);
+    if (!this.canCredit(p.money)) {
+      throw new BalanceLimitExceededError(this.id);
+    }
     return this.apply(LedgerDirection.Credit, p);
   }
 

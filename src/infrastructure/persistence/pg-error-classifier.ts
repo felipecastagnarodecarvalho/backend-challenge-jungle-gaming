@@ -70,7 +70,8 @@ export function classifyDatabaseError(err: unknown): unknown {
         cause: err,
       });
     }
-    if (code.startsWith('23')) {
+    // 22003 numeric_value_out_of_range: a value the schema cannot hold is as permanent as a CHECK failure.
+    if (code.startsWith('23') || code === '22003') {
       const constraint = typeof coded?.constraint === 'string' ? coded.constraint : undefined;
       return new IntegrityViolationError(messageOf(coded ?? err), constraint, { cause: err });
     }

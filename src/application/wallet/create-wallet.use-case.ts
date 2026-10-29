@@ -44,7 +44,8 @@ export interface CreateWalletDeps {
 export class CreateWalletUseCase {
   constructor(private readonly deps: CreateWalletDeps) {}
 
-  async execute(input: CreateWalletInput): Promise<CreatedWallet> {
+  async execute(rawInput: CreateWalletInput): Promise<CreatedWallet> {
+    const input = { ...rawInput, playerId: rawInput.playerId.toLowerCase() };
     let initialBalance: Money;
     try {
       initialBalance = Money.from(input.initialBalance);

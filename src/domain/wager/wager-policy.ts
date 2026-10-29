@@ -111,6 +111,16 @@ export class WagerPolicy {
         exposeBalance: true,
       };
     }
+    // 7: credits must keep the balance within the supported ceiling (mirrors a DB CHECK); rejecting here
+    // keeps the outcome auditable instead of letting the database overflow.
+    if (direction === LedgerDirection.Credit && !wallet.canCredit(tx.money)) {
+      return {
+        type: 'REJECT',
+        failureCode: FailureCode.BalanceLimitExceeded,
+        referenceTransactionId,
+        exposeBalance: true,
+      };
+    }
 
     return { type: 'APPLY', direction, referenceTransactionId };
   }

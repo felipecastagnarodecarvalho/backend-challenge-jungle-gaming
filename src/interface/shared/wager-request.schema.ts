@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { INTERNAL_PROVIDER_ID } from '../../domain/wager/wager-transaction';
 import { SUBMITTABLE_KINDS } from '../../domain/wager/wager-transaction-kind';
 import { moneySchema } from './money.schema';
+import { uuidSchema } from './uuid.schema';
 
 /** Printable ASCII without spaces. */
 const ASCII_ID = /^[\x21-\x7E]+$/;
@@ -17,8 +18,8 @@ const wagerShape = {
     .regex(/^[A-Za-z0-9._-]{1,64}$/, { error: 'providerId must match ^[A-Za-z0-9._-]{1,64}$' })
     .refine((v) => v !== INTERNAL_PROVIDER_ID, { error: `providerId "${INTERNAL_PROVIDER_ID}" is reserved` }),
   externalTransactionId: asciiId(128),
-  playerId: z.uuid(),
-  walletId: z.uuid(),
+  playerId: uuidSchema,
+  walletId: uuidSchema,
   roundId: asciiId(128),
   gameId: asciiId(128),
   kind: z.enum(SUBMITTABLE_KINDS, { error: `kind must be one of ${SUBMITTABLE_KINDS.join(', ')}` }),

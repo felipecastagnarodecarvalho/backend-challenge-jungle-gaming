@@ -76,3 +76,28 @@ describe('SQS envelope', () => {
     expect(() => parseEnvelope(body)).toThrow();
   });
 });
+
+describe('UUID normalisation at the edge', () => {
+  test('playerId/walletId are lowercased, so case-only differences hash identically', async () => {
+    const { computeWagerPayloadHash } = await import('../../../src/application/wager/payload-hash');
+    const upper = wagerRequestSchema.parse({
+      ...valid,
+      playerId: valid.playerId.toUpperCase(),
+      walletId: valid.walletId.toUpperCase(),
+    });
+    const lower = wagerRequestSchema.parse(valid);
+    expect(upper.playerId).toBe(valid.playerId);
+    expect(upper.walletId).toBe(valid.walletId);
+    expect(computeWagerPayloadHash(upper)).toBe(computeWagerPayloadHash(lower));
+  });
+
+  test('SQS data is normalised the same way', () => {
+    const body = JSON.stringify({
+      messageId: 'm',
+      type: 'WagerTransactionRequested',
+      occurredAt: '2026-07-29T15:00:00.000Z',
+      data: { ...valid, idempotencyKey: 'k', playerId: valid.playerId.toUpperCase() },
+    });
+    expect(parseEnvelope(body).data.playerId).toBe(valid.playerId);
+  });
+});

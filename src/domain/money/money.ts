@@ -35,6 +35,9 @@ const D = Decimal.clone({ precision: 40, rounding: Decimal.ROUND_HALF_EVEN, toEx
 const AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,14})\.[0-9]{2}$/;
 /** Signed variant used only to rebuild values produced by the system (e.g. SQL sums). */
 const SIGNED_AMOUNT_PATTERN = /^-?(0|[1-9][0-9]{0,17})\.[0-9]{2}$/;
+/** Full NUMERIC(20,2) non-negative range (18 integer digits), for values read back from the database. */
+const PERSISTED_AMOUNT_PATTERN = /^(0|[1-9][0-9]{0,17})\.[0-9]{2}$/;
+const MAX_AMOUNT = '999999999999999.99';
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 const SCALE = 2;
 
@@ -80,6 +83,30 @@ export class Money {
     }
     Money.assertCurrency(props.currency);
     return new Money(new D(props.amount), props.currency);
+  }
+
+  /**
+   * Rebuilds a value read from the database (NUMERIC(20,2): up to 18 integer
+   * digits, never negative in our schema). Rehydration must never apply the
+   * stricter *input* contract — a persisted value that is valid for the
+   * database must always load, otherwise the wallet would become unusable.
+   */
+  static fromPersisted(props: MoneyProps): Money {
+    if (typeof props.amount !== 'string' || !PERSISTED_AMOUNT_PATTERN.test(props.amount)) {
+      throw new InvalidMoneyError(`invalid persisted amount: ${String(props.amount)}`);
+    }
+    Money.assertCurrency(props.currency);
+    return new Money(new D(props.amount), props.currency);
+  }
+
+  /**
+   * Largest amount any balance may reach (`999999999999999.99`): the same
+   * 15-integer-digit bound as the input contract, enforced by the policy
+   * (BALANCE_LIMIT_EXCEEDED) and by CHECK constraints in the database.
+   */
+  static max(currency: string): Money {
+    Money.assertCurrency(currency);
+    return new Money(new D(MAX_AMOUNT), currency);
   }
 
   static zero(currency: string): Money {

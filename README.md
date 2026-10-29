@@ -76,9 +76,9 @@ Integração e concorrência usam o Postgres e o LocalStack do compose (`docker 
 
 ```bash
 docker compose up -d postgres localstack
-bun run test:unit           # 223 testes
+bun run test:unit           # 243 testes
 bun run test:reset
-bun run test:integration    # 76 testes (14 arquivos)
+bun run test:integration    # 90 testes (16 arquivos)
 bun run test:concurrency    # 11 testes (8 cenários; sobe processos `bun src/main.ts`)
 ```
 
@@ -166,6 +166,12 @@ curl -s $B/health/ready        # 200 {status:"ok",checks:{database,sqs}} | 503 d
 curl -s $B/metrics | grep '^wagering_'
 ```
 
+### Regras de identificação
+
+- UUIDs (`playerId`, `walletId` e os ids nas rotas) são aceitos em qualquer caixa e normalizados para minúsculas antes do hash e das validações. Ou seja, o mesmo id em maiúsculas ou em minúsculas é a mesma operação.
+- A `Idempotency-Key` vale **por provider**: dois providers podem usar a mesma string sem colisão. Um conflito (409) nunca expõe transações de outro provider.
+- O saldo de uma wallet tem teto de `999999999999999.99`. Um crédito que passaria desse valor é rejeitado com `422 BALANCE_LIMIT_EXCEEDED`, e a wallet continua operando normalmente.
+
 ### Mapeamento de status (`POST /wagering/transactions`)
 
 | Situação | HTTP | Pode reenviar a mesma requisição? |
@@ -179,7 +185,7 @@ curl -s $B/metrics | grep '^wagering_'
 | Payload inválido / header ausente | 400 `VALIDATION_ERROR` / `IDEMPOTENCY_KEY_REQUIRED` | não |
 | Falha transitória de infraestrutura | 503 `TRANSIENT_FAILURE` + `Retry-After` (`retryable: true`) | **sim** |
 
-Os `failureCode`s (`INSUFFICIENT_FUNDS`, `REVERSAL_INSUFFICIENT_FUNDS`, `REFERENCE_NOT_FOUND`, `ALREADY_REVERSED`, ...) estão documentados no [`ARCHITECTURE.md`](ARCHITECTURE.md#9-códigos-de-falha-e-mapeamento-http).
+Os `failureCode`s (`INSUFFICIENT_FUNDS`, `REVERSAL_INSUFFICIENT_FUNDS`, `BALANCE_LIMIT_EXCEEDED`, `REFERENCE_NOT_FOUND`, `ALREADY_REVERSED`, ...) estão documentados no [`ARCHITECTURE.md`](ARCHITECTURE.md#9-códigos-de-falha-e-mapeamento-http).
 
 ### Mensagem SQS (`wager-transactions.fifo`)
 

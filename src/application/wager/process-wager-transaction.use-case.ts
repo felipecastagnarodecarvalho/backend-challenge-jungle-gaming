@@ -50,7 +50,13 @@ export class ProcessWagerTransactionUseCase {
     this.gate = deps.walletGate ?? new KeyedSerializer();
   }
 
-  async execute(cmd: ProcessWagerCommand): Promise<ProcessWagerResult> {
+  async execute(rawCmd: ProcessWagerCommand): Promise<ProcessWagerResult> {
+    // Ids are canonical lowercase UUIDs before hashing/comparing (edges normalise too; this is the safety net).
+    const cmd: ProcessWagerCommand = {
+      ...rawCmd,
+      playerId: rawCmd.playerId.toLowerCase(),
+      walletId: rawCmd.walletId.toLowerCase(),
+    };
     const startedAt = performance.now();
     const payloadHash = computeWagerPayloadHash(cmd);
     // Fail fast on invalid commands, before opening a transaction (and before touching the inbox).

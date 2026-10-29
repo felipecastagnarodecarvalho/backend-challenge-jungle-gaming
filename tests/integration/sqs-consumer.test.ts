@@ -136,4 +136,29 @@ describe('SQS consumer', () => {
     expect(await walletBalance(w.id)).toBe('100.00');
     await assertWalletConsistent(w.id);
   }, 60_000);
+
+  test('deterministic permanent error (corrupted wallet) goes to the DLQ immediately, not after maxReceiveCount', async () => {
+    const w = await createWallet(ctx.url, '100.00');
+    // Simulate corruption the schema normally forbids: balance no longer matches the ledger chain.
+    await db().begin(async (tx) => {
+      await tx`SET LOCAL session_replication_role = replica`;
+      await tx`UPDATE wallets SET balance = 130.00 WHERE id = ${w.id}`;
+    });
+    const messageId = `msg-perm-${crypto.randomUUID()}`;
+    await sendWager(ctx.queues.urls.wager, messageId, data(w, { money: { amount: '10.00', currency: 'BRL' } }));
+    const dead = await waitFor(
+      async () => {
+        const msgs = await receiveAll(ctx.queues.urls.dlq, { idleRounds: 1, visibilityTimeout: 1 });
+        return msgs.find((m) => m.Body?.includes(messageId));
+      },
+      { timeoutMs: 15_000, intervalMs: 300 },
+    );
+    expect(dead.MessageAttributes?.errorCode?.StringValue).toBe('INTEGRITY_VIOLATION');
+    // explicit DLQ on the first delivery: the wager queue never saw a retry for it
+    expect(Number(dead.Attributes?.ApproximateReceiveCount ?? '1')).toBe(1);
+    expect(await inboxRow(messageId)).toBeUndefined();
+    expect(
+      sumMetric(await scrape(ctx.url), 'wagering_sqs_dlq_messages_total', { reason: 'permanent_error' }),
+    ).toBeGreaterThanOrEqual(1);
+  }, 30_000);
 });

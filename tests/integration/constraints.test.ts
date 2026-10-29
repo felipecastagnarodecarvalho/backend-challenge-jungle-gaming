@@ -191,8 +191,9 @@ describe('ledger', () => {
       () =>
         db()`INSERT INTO wallet_ledger_entries VALUES (${uuid()}, ${s.walletId}, ${betId}, 'CREDIT', 10, 'BRL', 0, 10, 1, now())`,
     );
-    expect(dup.code).toBe('23505');
-    expect(dup.constraint).toBe('ledger_wallet_version_uk');
+    // Since migration 5 the chain trigger (contiguous versions) rejects it first (23000); the unique index
+    // ledger_wallet_version_uk (23505) remains the backstop for two concurrent inserts of the same version.
+    expect(['23000', '23505']).toContain(dup.code);
   });
 
   test('at most one entry per transaction and wallet', async () => {
@@ -239,7 +240,7 @@ describe('wager_transactions', () => {
     const k = await expectPgError(() =>
       insertTx(db(), { walletId: s.walletId, playerId: s.playerId, key: `key-${s.walletId}` }),
     );
-    expect(k.constraint).toBe('wager_tx_idempotency_key_uk');
+    expect(k.constraint).toBe('wager_tx_provider_idempotency_key_uk');
     const e = await expectPgError(() =>
       insertTx(db(), { walletId: s.walletId, playerId: s.playerId, externalId: `e-${s.walletId}` }),
     );
@@ -336,5 +337,87 @@ describe('inbox', () => {
     );
     expect(err.constraint).toBe('inbox_messages_pk');
     await db()`INSERT INTO inbox_messages VALUES ('other-consumer', ${id}, ${hash}, NULL, now(), NULL)`;
+  });
+});
+
+describe('review fixes: provider-scoped keys, balance ceiling, ledger ⇒ balance', () => {
+  test('the same idempotency key may be used by different providers, never twice by one', async () => {
+    const s = await seedWallet();
+    const key = `shared-${s.walletId}`;
+    await insertTx(db(), { walletId: s.walletId, playerId: s.playerId, providerId: 'provider-a', key });
+    await insertTx(db(), { walletId: s.walletId, playerId: s.playerId, providerId: 'provider-b', key });
+    const dup = await expectPgError(() =>
+      insertTx(db(), { walletId: s.walletId, playerId: s.playerId, providerId: 'provider-b', key }),
+    );
+    expect(dup.constraint).toBe('wager_tx_provider_idempotency_key_uk');
+  });
+
+  test('balance ceiling is a CHECK on wallets and ledger', async () => {
+    const ok = await seedWallet('999999999999999.99');
+    expect(ok.walletId).toBeString();
+    const err = await expectPgError(
+      () => db()`INSERT INTO wallets VALUES (${uuid()}, ${uuid()}, 'BRL', 1000000000000000.00, 1, now(), now())`,
+    );
+    expect(err.constraint).toBe('wallets_balance_ceiling_ck');
+  });
+
+  test('ledger entry without a matching wallet balance change fails at COMMIT', async () => {
+    const s = await seedWallet();
+    const err = await expectPgError(() =>
+      db().begin(async (tx) => {
+        const betId = await insertTx(tx, { walletId: s.walletId, playerId: s.playerId });
+        // ledger says 100 -> 90 (v2) but the wallet row is never updated
+        await tx`INSERT INTO wallet_ledger_entries VALUES (${uuid()}, ${s.walletId}, ${betId}, 'DEBIT', 10, 'BRL', 100, 90, 2, now())`;
+      }),
+    );
+    expect(err.code).toBe('23000');
+    expect(err.message).toContain('no matching wallet balance change');
+  });
+
+  test('ledger entry for a non-PROCESSED (or LOSS) transaction fails at COMMIT', async () => {
+    const s = await seedWallet();
+    for (const row of [
+      { status: 'REJECTED', failureCode: 'INSUFFICIENT_FUNDS' },
+      { kind: 'LOSS', amount: '10.00' },
+    ]) {
+      const err = await expectPgError(() =>
+        db().begin(async (tx) => {
+          const txId = await insertTx(tx, { walletId: s.walletId, playerId: s.playerId, ...row });
+          await tx`UPDATE wallets SET balance = 90, version = 2 WHERE id = ${s.walletId}`;
+          await tx`INSERT INTO wallet_ledger_entries VALUES (${uuid()}, ${s.walletId}, ${txId}, 'DEBIT', 10, 'BRL', 100, 90, 2, now())`;
+        }),
+      );
+      expect(err.message).toContain('requires a PROCESSED balance-moving transaction');
+    }
+  });
+
+  test('ledger versions must be contiguous', async () => {
+    const s = await seedWallet();
+    const betId = await insertTx(db(), { walletId: s.walletId, playerId: s.playerId });
+    const err = await expectPgError(
+      () =>
+        db()`INSERT INTO wallet_ledger_entries VALUES (${uuid()}, ${s.walletId}, ${betId}, 'DEBIT', 10, 'BRL', 100, 90, 3, now())`,
+    );
+    expect(err.message).toContain('out of order');
+  });
+
+  test('legacy wallet above the ceiling (pre-existing row) may be debited but never raised', async () => {
+    const s2 = await seedWallet('999999999999999.99');
+    await db().begin(async (tx) => {
+      await tx`SET LOCAL session_replication_role = replica`;
+      await tx`UPDATE wallets SET balance = 1999999999999999.98 WHERE id = ${s2.walletId}`;
+    });
+    // decrease: allowed by the ceiling trigger
+    await db()`UPDATE wallets SET balance = 1999999999999998.98, version = 2 WHERE id = ${s2.walletId}`.catch(
+      (e: Error) => {
+        // only the deferred ledger-backed trigger may complain (no ledger entry in this raw test) — never the ceiling
+        expect(e.message).not.toContain('ceiling');
+      },
+    );
+    const raise = await expectPgError(
+      () => db()`UPDATE wallets SET balance = 2000000000000000.00, version = 2 WHERE id = ${s2.walletId}`,
+    );
+    expect(raise.code).toBe('23514');
+    expect(raise.message).toContain('exceeds the ceiling');
   });
 });

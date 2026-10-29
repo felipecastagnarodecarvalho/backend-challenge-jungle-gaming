@@ -17,6 +17,7 @@ export const FailureCode = {
   ReferenceNotProcessed: 'REFERENCE_NOT_PROCESSED',
   AlreadyReversed: 'ALREADY_REVERSED',
   AmountMismatch: 'AMOUNT_MISMATCH',
+  BalanceLimitExceeded: 'BALANCE_LIMIT_EXCEEDED',
   ProcessingError: 'PROCESSING_ERROR',
   WalletNotFound: 'WALLET_NOT_FOUND',
 } as const;
@@ -47,6 +48,10 @@ export const FAILURE_CODE_INFO: Readonly<Record<FailureCode, FailureCodeInfo>> =
   REFERENCE_NOT_PROCESSED: { retryable: false, description: 'Referenced transaction was rejected or failed' },
   ALREADY_REVERSED: { retryable: false, description: 'Referenced transaction was already reversed' },
   AMOUNT_MISMATCH: { retryable: false, description: 'Reversal amount differs from the referenced amount' },
+  BALANCE_LIMIT_EXCEEDED: {
+    retryable: false,
+    description: 'Credit would push the balance above the supported maximum (999999999999999.99)',
+  },
   PROCESSING_ERROR: { retryable: false, description: 'Unexpected permanent error while processing' },
   WALLET_NOT_FOUND: { retryable: false, description: 'Wallet does not exist' },
 };

@@ -44,9 +44,9 @@ describe('classifyDatabaseError', () => {
   });
 
   test('23505 carries the constraint name', () => {
-    const out = classifyDatabaseError(pgError('23505', { constraint: 'wager_tx_idempotency_key_uk' }));
+    const out = classifyDatabaseError(pgError('23505', { constraint: 'wager_tx_provider_idempotency_key_uk' }));
     expect(out).toBeInstanceOf(UniqueViolationError);
-    expect((out as UniqueViolationError).constraint).toBe('wager_tx_idempotency_key_uk');
+    expect((out as UniqueViolationError).constraint).toBe('wager_tx_provider_idempotency_key_uk');
   });
 
   test.each(['23514', '23503', '23000', '23502'])('%s is a permanent integrity violation', (code) => {

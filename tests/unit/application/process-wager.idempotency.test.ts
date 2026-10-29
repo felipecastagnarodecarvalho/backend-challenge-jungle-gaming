@@ -152,4 +152,40 @@ describe('ProcessWagerTransaction idempotency (fakes)', () => {
     const r = await useCase.execute(cmd({ money: { amount: '1.00', currency: 'USD' } }));
     expect(r).toMatchObject({ status: 'REJECTED', failureCode: 'CURRENCY_MISMATCH', balance: null });
   });
+
+  test('uppercase UUIDs are canonicalised: same operation, same hash, replay instead of conflict', async () => {
+    const upper = cmd({ playerId: PLAYER.toUpperCase(), walletId: WALLET.toUpperCase() });
+    const first = await useCase.execute(upper);
+    expect(first).toMatchObject({ outcome: 'TRANSACTION', status: 'PROCESSED', idempotentReplay: false });
+    const replay = await useCase.execute(cmd());
+    expect(replay).toMatchObject({ outcome: 'TRANSACTION', idempotentReplay: true });
+    expect(uow.store.ledger).toHaveLength(1);
+  });
+
+  test('idempotency keys are scoped per provider: no squatting, no cross-provider leakage', async () => {
+    // provider-b uses the key provider-a will use, on its own (distinct) operation
+    const squat = await useCase.execute(
+      cmd({ providerId: 'provider-b', externalTransactionId: 'b-1', idempotencyKey: 'provider-a:tx-1' }),
+    );
+    expect(squat).toMatchObject({ outcome: 'TRANSACTION', status: 'PROCESSED', idempotentReplay: false });
+    // provider-a's legitimate request with that key is NOT blocked and sees nothing of provider-b
+    const legit = await useCase.execute(cmd());
+    expect(legit).toMatchObject({ outcome: 'TRANSACTION', status: 'PROCESSED', idempotentReplay: false });
+    if (squat.outcome === 'TRANSACTION' && legit.outcome === 'TRANSACTION') {
+      expect(legit.transactionId).not.toBe(squat.transactionId);
+    }
+    // a conflict for provider-b never exposes provider-a's transaction id
+    const conflict = await useCase.execute(
+      cmd({
+        providerId: 'provider-b',
+        externalTransactionId: 'b-1',
+        idempotencyKey: 'provider-a:tx-1',
+        money: { amount: '1.00', currency: 'BRL' },
+      }),
+    );
+    expect(conflict).toMatchObject({ outcome: 'IDEMPOTENCY_CONFLICT', reason: 'PAYLOAD_MISMATCH' });
+    if (conflict.outcome === 'IDEMPOTENCY_CONFLICT' && squat.outcome === 'TRANSACTION') {
+      expect(conflict.existingTransactionId).toBe(squat.transactionId);
+    }
+  });
 });

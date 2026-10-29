@@ -1,10 +1,17 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  ConcurrencyInvariantError,
   IntegrityViolationError,
   TransientInfrastructureError,
+  UniqueViolationError,
   ValidationError,
 } from '../../../src/application/errors';
-import { classifyMessage, retryVisibilitySeconds } from '../../../src/interface/sqs/message-classifier';
+import { InsufficientFundsError } from '../../../src/domain/wallet/wallet.errors';
+import {
+  classifyMessage,
+  heartbeatIntervalMs,
+  retryVisibilitySeconds,
+} from '../../../src/interface/sqs/message-classifier';
 import { InvalidMessageError } from '../../../src/interface/sqs/sqs-envelope.schema';
 
 const tx = (status: 'PROCESSED' | 'REJECTED' | 'PENDING_REFERENCE' | 'FAILED', replay = false) =>
@@ -50,16 +57,38 @@ describe('classifyMessage', () => {
     });
   });
 
-  test('transient and unknown/permanent errors -> RETRY (redrive takes over after maxReceiveCount)', () => {
+  test('deterministic permanent errors -> DLQ immediately with their code', () => {
+    expect(classifyMessage({ error: new IntegrityViolationError('chain broken') })).toMatchObject({
+      action: 'DLQ',
+      reason: 'permanent_error',
+      errorCode: 'INTEGRITY_VIOLATION',
+    });
+    expect(classifyMessage({ error: new ConcurrencyInvariantError('x') })).toMatchObject({
+      action: 'DLQ',
+      errorCode: 'CONCURRENCY_INVARIANT',
+    });
+    expect(classifyMessage({ error: new InsufficientFundsError('w') })).toMatchObject({
+      action: 'DLQ',
+      errorCode: 'INSUFFICIENT_FUNDS',
+    });
+  });
+
+  test('transient, unknown and non-race unique violations -> RETRY (redrive after maxReceiveCount)', () => {
     expect(classifyMessage({ error: new TransientInfrastructureError('lock_timeout') })).toEqual({
       action: 'RETRY',
       reason: 'TRANSIENT_FAILURE',
     });
-    expect(classifyMessage({ error: new IntegrityViolationError('x') })).toEqual({
+    expect(classifyMessage({ error: new UniqueViolationError('ledger_wallet_version_uk') })).toEqual({
       action: 'RETRY',
-      reason: 'INTEGRITY_VIOLATION',
+      reason: 'UNIQUE_VIOLATION',
     });
     expect(classifyMessage({ error: new Error('bug') })).toEqual({ action: 'RETRY', reason: 'unknown' });
+  });
+
+  test('heartbeat interval is half the visibility timeout, at least 1 s', () => {
+    expect(heartbeatIntervalMs(30)).toBe(15_000);
+    expect(heartbeatIntervalMs(2)).toBe(1_000);
+    expect(heartbeatIntervalMs(1)).toBe(1_000);
   });
 
   test('visibility backoff', () => {

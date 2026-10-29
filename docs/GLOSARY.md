@@ -114,6 +114,10 @@ Organização: seções temáticas e, dentro de cada uma, ordem alfabética.
 
 **`rehydrate`** — Factory que **reconstrói** um objeto a partir de dados já persistidos, **sem** revalidar regras de transição (o estado já foi validado ao ser gravado).
 
+**`Money.fromPersisted`** — Factory que reconstrói valores lidos do banco aceitando todo o intervalo de `NUMERIC(20,2)`. É diferente de `Money.from`, o contrato de entrada estrito: um valor que o banco aceitou sempre carrega.
+
+**Teto de saldo (`Money.max`)** — `999999999999999.99`. Nenhuma operação pode *elevar* um saldo acima dele (`BALANCE_LIMIT_EXCEEDED` no domínio; trigger `wallets_enforce_ceiling` e CHECK `ledger_balance_ceiling_ck` no banco).
+
 **Use case (caso de uso)** — Classe da camada de aplicação que orquestra uma operação de negócio (ex.: `ProcessWagerTransaction`). O mesmo use case atende HTTP e SQS.
 
 **Value Object (objeto de valor)** — Objeto definido pelo valor, não por identidade, e imutável (ex.: `Money`).
@@ -128,7 +132,7 @@ Organização: seções temáticas e, dentro de cada uma, ordem alfabética.
 
 **CHECK constraint** — Regra declarada na tabela que o banco valida em toda escrita (ex.: `balance >= 0`).
 
-**Constraint trigger diferido (`DEFERRABLE INITIALLY DEFERRED`)** — Trigger que só roda no **COMMIT**, não a cada comando. O `wallets_ledger_backed` usa isso para checar, no fim da transação, que o saldo da wallet bate com o último lançamento.
+**Constraint trigger diferido (`DEFERRABLE INITIALLY DEFERRED`)** — Trigger que só roda no **COMMIT**, não a cada comando. O `wallets_ledger_backed` usa isso para checar, no fim da transação, que o saldo da wallet bate com o último lançamento. O `ledger_backed_by_wallet` (migration 5) faz o caminho inverso: todo lançamento precisa pertencer a uma transação PROCESSED que move saldo e corresponder a uma mudança real de versão da wallet.
 
 **FK composta** — Chave estrangeira com mais de uma coluna, ex.: `(wallet_id, currency)`. Garante que o lançamento está na mesma moeda da wallet.
 
@@ -215,7 +219,9 @@ O projeto classifica erros como transitórios ou permanentes por esse código.
 
 **Idempotência** — Propriedade de uma operação que, repetida várias vezes, produz o mesmo efeito que uma única vez.
 
-**`Idempotency-Key`** — Header HTTP obrigatório que identifica a operação (padrão `"{providerId}:{externalTransactionId}"`). É a fonte da verdade para detectar repetições.
+**`Idempotency-Key`** — Header HTTP obrigatório que identifica a operação (padrão `"{providerId}:{externalTransactionId}"`). É a fonte da verdade para detectar repetições. A unicidade é **por provider** (`UNIQUE(provider_id, idempotency_key)`): um provider não consegue ocupar nem descobrir as keys de outro.
+
+**Canonicalização de UUID** — `playerId`, `walletId` e ids de rota são convertidos para minúsculas na borda, antes do hash e das comparações. O Postgres sempre devolve `uuid` em minúsculas, então sem isso o mesmo id em outra caixa parecia outro.
 
 **`idempotentReplay`** — Campo da resposta: `true` quando a requisição é uma repetição e o sistema devolveu o resultado original, sem reprocessar.
 
@@ -280,6 +286,8 @@ O projeto classifica erros como transitórios ou permanentes por esse código.
 **SQS (Simple Queue Service)** — Serviço de filas da AWS. Aqui é emulado localmente pelo LocalStack.
 
 **Visibility timeout** — Tempo em que uma mensagem recebida fica invisível para os outros consumidores. Se não houver ack nesse prazo, ela volta para a fila.
+
+**Heartbeat de visibilidade** — Renovação periódica (`ChangeMessageVisibility` a cada metade do visibility timeout) feita pelo consumer enquanto uma mensagem está em processamento. Assim ela não reaparece para outra instância nem caminha para a DLQ só por estar esperando, por exemplo atrás de uma hot wallet.
 
 **Worker** — Processo/laço em segundo plano que executa uma tarefa recorrente (consumer SQS, outbox publisher, worker de pendências).
 
@@ -463,6 +471,7 @@ Códigos estáveis, legíveis por máquina. Detalhes e ação esperada do proved
 - `REFERENCE_NOT_PROCESSED`: a referência foi rejeitada ou falhou.
 - `ALREADY_REVERSED`: a referência já foi revertida.
 - `AMOUNT_MISMATCH`: o valor da reversão difere do valor da referência.
+- `BALANCE_LIMIT_EXCEEDED`: um crédito (WIN, REFUND ou ROLLBACK de BET) levaria o saldo acima do teto de `999999999999999.99`. A transação fica REJECTED, de forma auditável e com evento.
 - `PROCESSING_ERROR`: erro permanente inesperado no worker (status `FAILED`).
 
 **Códigos de erro HTTP (`error.code`)**

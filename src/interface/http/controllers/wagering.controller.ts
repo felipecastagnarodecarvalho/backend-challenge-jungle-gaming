@@ -1,10 +1,10 @@
 import { Body, Controller, Get, Headers, Inject, Param, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { z } from 'zod';
 import { NotFoundError } from '../../../application/errors';
 import type { ProviderIdentity } from '../../../application/ports/system';
 import { GetWagerTransactionQuery } from '../../../application/wager/get-wager-transaction.query';
 import { ProcessWagerTransactionUseCase } from '../../../application/wager/process-wager-transaction.use-case';
+import { uuidSchema } from '../../shared/uuid.schema';
 import { IDEMPOTENCY_KEY_REGEX, type WagerRequestBody, wagerRequestSchema } from '../../shared/wager-request.schema';
 import { assertProviderAccess, CurrentProvider } from '../auth/current-provider.decorator';
 import { correlationIdOf } from '../correlation-id.middleware';
@@ -53,7 +53,7 @@ export class WageringController {
 
   @Get(':transactionId')
   async get(@Param('transactionId') transactionId: string, @CurrentProvider() identity: ProviderIdentity) {
-    const view = await this.getTransaction.byId(parseOrThrow(z.uuid(), transactionId, 'transactionId'));
+    const view = await this.getTransaction.byId(parseOrThrow(uuidSchema, transactionId, 'transactionId'));
     // Do not reveal other providers' transactions: answer as if it did not exist.
     if (identity.kind === 'provider' && identity.providerId !== view.providerId) {
       throw new NotFoundError('TRANSACTION_NOT_FOUND', 'Transaction not found');

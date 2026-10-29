@@ -17,7 +17,7 @@ import type { ProcessWagerResult } from '../../application/wager/wager-result';
 import type { AppConfig } from '../../bootstrap/config';
 import { APP_CONFIG, FAULT_INJECTOR, LOGGER, METRICS, QUEUE_REGISTRY, SQS_CLIENT } from '../../bootstrap/tokens';
 import type { QueueRegistry } from '../../infrastructure/messaging/queue-registry';
-import { classifyMessage, retryVisibilitySeconds } from './message-classifier';
+import { classifyMessage, heartbeatIntervalMs, retryVisibilitySeconds } from './message-classifier';
 import { parseEnvelope } from './sqs-envelope.schema';
 
 const sha256 = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
@@ -48,6 +48,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
   private loop: Promise<void> | undefined;
   private readonly notStarted = new Map<string, Message>();
   private readonly inFlight = new Map<string, Message>();
+  private readonly heartbeats = new Map<string, ReturnType<typeof setInterval>>();
   private queueUrl: string | undefined;
   private dlqUrl: string | undefined;
   private readonly log: LoggerPort;
@@ -140,6 +141,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
     const receipt = message.ReceiptHandle as string;
     this.notStarted.delete(receipt);
     this.inFlight.set(receipt, message);
+    this.startHeartbeat(receipt);
     const body = message.Body ?? '';
     const receiveCount = Number(message.Attributes?.ApproximateReceiveCount ?? '1');
     let log = this.log.child({ sqsMessageId: message.MessageId, receiveCount });
@@ -175,6 +177,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
     } catch (error) {
       outcome = { error };
     }
+    this.stopHeartbeat(receipt);
 
     try {
       const decision = classifyMessage(outcome);
@@ -189,7 +192,12 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
           await this.delete(receipt);
           this.metrics.sqsMessage('dlq');
           this.metrics.dlq(decision.reason);
-          log.error({ errorCode: decision.errorCode, error: decision.errorMessage }, 'poison message sent to DLQ');
+          log.error(
+            { errorCode: decision.errorCode, error: decision.errorMessage },
+            decision.reason === 'invalid_payload'
+              ? 'poison message sent to DLQ'
+              : 'permanent failure: message sent to DLQ',
+          );
           break;
         case 'RETRY': {
           const delay = retryVisibilitySeconds(receiveCount, this.config.sqs.retryBaseS, this.config.sqs.retryMaxS);
@@ -219,6 +227,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
       // Delete/visibility failures are safe: the message reappears and the inbox dedupes it.
       log.warn({ err: err instanceof Error ? err.message : String(err) }, 'failed to settle message');
     } finally {
+      this.stopHeartbeat(receipt);
       this.inFlight.delete(receipt);
     }
   }
@@ -244,7 +253,38 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
     );
   }
 
+  /**
+   * Visibility heartbeat: while a message is being processed (it may wait in the
+   * per-wallet queue behind a hot wallet), keep extending its visibility so it
+   * does not reappear to another consumer, inflate ApproximateReceiveCount and
+   * eventually be redriven to the DLQ although it is valid. Failures are only
+   * logged: a lapsed visibility is still safe (the inbox dedupes the redelivery).
+   */
+  private startHeartbeat(receipt: string): void {
+    const timer = setInterval(() => {
+      this.sqs
+        .send(
+          new ChangeMessageVisibilityCommand({
+            QueueUrl: this.queueUrl,
+            ReceiptHandle: receipt,
+            VisibilityTimeout: this.config.sqs.visibilityTimeoutS,
+          }),
+        )
+        .catch((err: unknown) =>
+          this.log.warn({ err: err instanceof Error ? err.message : String(err) }, 'visibility heartbeat failed'),
+        );
+    }, heartbeatIntervalMs(this.config.sqs.visibilityTimeoutS));
+    this.heartbeats.set(receipt, timer);
+  }
+
+  private stopHeartbeat(receipt: string): void {
+    const timer = this.heartbeats.get(receipt);
+    if (timer) clearInterval(timer);
+    this.heartbeats.delete(receipt);
+  }
+
   private async releaseVisibility(messages: Message[]): Promise<void> {
+    for (const m of messages) if (m.ReceiptHandle) this.stopHeartbeat(m.ReceiptHandle);
     if (!this.queueUrl || messages.length === 0) return;
     for (let i = 0; i < messages.length; i += 10) {
       const chunk = messages.slice(i, i + 10);

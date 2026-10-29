@@ -24,7 +24,8 @@ const amount = (value: string | number, currency: string): Money => {
   if (typeof value !== 'string') {
     throw new Error('NUMERIC column returned as number; refusing to build Money from a float');
   }
-  return Money.from({ amount: normaliseScale(value), currency });
+  // fromPersisted, not the input contract: any value the NUMERIC(20,2) column holds must load.
+  return Money.fromPersisted({ amount: normaliseScale(value), currency });
 };
 
 /** NUMERIC(20,2) is always rendered with 2 decimals by Postgres; keep a defensive normalisation. */
