@@ -4,3 +4,8 @@ coverage/
 .env
 *.log
 load-results/
+
+# Skills locais de IA (não fazem parte da entrega)
+.agents/
+.aider-desk/
+skills-lock.json
