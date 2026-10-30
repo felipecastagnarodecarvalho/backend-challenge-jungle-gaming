@@ -123,3 +123,6 @@ Registro cronológico do que foi feito durante o desafio (arquitetura → execu�
 
 ## Collection Postman
 - `postman/wagering-api.postman_collection.json` + environment local (baseUrl `http://localhost:3001`). 7 pastas com asserções; pastas 0–5 validadas com Newman contra o compose (29 requests, 39 asserções, 0 falhas; saldo final 1025.00 conforme esperado). Seção "Postman" adicionada ao README.
+
+## Status do relatório de revisão
+- `docs/REVIEW.md` ganhou um aviso no topo e a §7 (status das correções): F1, F2, F3, F5, F6, F7 e F8 corrigidos em `7845a15`, F4 e F9 aceitos. Correções reconferidas ao vivo contra o compose.

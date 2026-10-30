@@ -3,6 +3,8 @@
 > Revisor: agente **Revisor** (auditoria cética, sem alterar código-fonte). Data: 2026-10-29.
 > Base revisada: `c993098` (HEAD). Método: leitura de todo `src/`, migrations e suítes de teste; execução de todas as suítes; sondas HTTP contra o compose em execução (3 instâncias), incluindo corridas entre instâncias e casos-limite de `Money`.
 
+> **Status pós-revisão (2026-10-30): todos os must-fix foram corrigidos** no commit `7845a15`, assim como F5, F6, F7 e F8. F4 e F9 foram aceitos e documentados em `ARCHITECTURE.md` §15. O detalhe está na [§7](#7-status-das-correções). O texto das seções 1–6 preserva a auditoria original, feita sobre `c993098`.
+
 ## 1. Resumo
 
 A entrega implementa o desafio de forma completa e acima da média. O desenho é sólido: uma transação SQL por operação, lock pessimista por wallet, idempotência re-checada sob o lock, `ON CONFLICT DO NOTHING` para a corrida residual, inbox e outbox transacionais e invariantes duplicadas no schema (CHECKs, FKs compostas, índice único parcial, triggers append-only e um constraint trigger diferido saldo⇔ledger). Os 8 cenários de concorrência rodam com processos reais e passam. A documentação é honesta e detalhada.
@@ -264,10 +266,32 @@ Legenda: ✅ atendido · ⚠️ parcial ou com ressalva · ❌ ausente ou errado
 - Testes de concorrência com **processos reais**, kill no meio da carga e falhas injetadas (`exit(137)` após o commit, morte após o claim do outbox).
 - O teste de carga levou a uma correção real (starvation do pool, resolvida com `KeyedSerializer`), registrada com antes e depois e uma análise honesta.
 
-## 6. Must-fix antes da entrega
+## 6. Must-fix antes da entrega (✅ todos resolvidos — ver §7)
 
 1. **F1:** normalizar `playerId`/`walletId` para minúsculas na borda (HTTP, SQS e `POST /wallets`) antes do hash, com testes de integração de UUID em maiúsculas.
 2. **F2:** reidratar valores persistidos sem o teto do contrato de entrada e impor um teto de saldo coerente (CHECK no banco mais rejeição de negócio auditável), com teste de limite.
 3. **F3** (se a autenticação for demonstrada): escopar a idempotency key por provider ou exigir o prefixo `providerId:` com auth ligada, e não expor `existingTransactionId` de outro provider.
 
 Recomendados, se houver tempo: F6 (DLQ imediata para erro de integridade) e F5 (heartbeat de visibilidade).
+
+## 7. Status das correções
+
+Correções aplicadas em `7845a15` (`fix: case-insensitive uuids, balance ceiling with persisted rehydration, provider-scoped idempotency keys`). Suítes depois da correção: unit 243/243, integração 90/90, concorrência 11/11, `typecheck` e `lint` limpos.
+
+| Achado | Status | Como foi resolvido | Evidência |
+|---|---|---|---|
+| **F1** UUIDs em maiúsculas | ✅ corrigido | `uuidSchema` normaliza para minúsculas na borda (HTTP, SQS, `POST /wallets` e ids de rota) e os use cases normalizam de novo antes do hash e das validações | `src/interface/shared/uuid.schema.ts:9`, `process-wager-transaction.use-case.ts:57-58`, `create-wallet.use-case.ts:48`; `tests/integration/ids-and-limits.test.ts`, `tests/unit/interface/wager-request.schema.test.ts` |
+| **F2** teto de saldo | ✅ corrigido | `Money.fromPersisted` reidrata toda a faixa de `NUMERIC(20,2)`. Teto de saldo `999999999999999.99`: um crédito que o ultrapassa vira `REJECTED / BALANCE_LIMIT_EXCEEDED` (auditável, com evento). A migration 5 impede **elevar** o saldo acima do teto, sem bloquear débitos em linhas legadas | `money.ts:94`, `mappers.ts:27`, `failure-code.ts:20`, `Migration20261030000005BalanceCeilingAndLedgerGuards.ts`; `tests/integration/ids-and-limits.test.ts` |
+| **F3** idempotency key global | ✅ corrigido | A migration 4 troca a unicidade global por `UNIQUE(provider_id, idempotency_key)`, e as buscas filtram por provider. Um 409 só expõe transações do próprio provider | `Migration20261030000004ProviderScopedIdempotency.ts:17`; teste de auth em `tests/integration` |
+| **F5** heartbeat de visibilidade | ✅ corrigido | O consumer estende a visibilidade enquanto a mensagem está em processamento | `wager-transactions.consumer.ts`; `tests/integration/sqs-heartbeat.test.ts` |
+| **F6** erro permanente → DLQ | ✅ corrigido | Erros determinísticos (integridade, estado impossível, domínio) vão direto à DLQ com `errorCode`. Uma violação de unicidade inesperada continua em retry, porque pode ser corrida | `message-classifier.ts:23-47`; `tests/unit/interface/message-classifier.test.ts` |
+| **F7** garantias só de aplicação | ✅ corrigido | Trigger diferido: um lançamento exige transação `PROCESSED`, que não seja LOSS, e uma wallet que atingiu aquela versão; versões contíguas | migration 5 |
+| **F8** `ON CONFLICT` sem alvo | ✅ corrigido | `ON CONFLICT (provider_id, idempotency_key)`; retry só para as constraints de idempotência, reversão e inbox | repositório de transações |
+| **F4** sem retorno via SQS para wallet inexistente ou conflito | ➖ aceito | Não há transação persistida à qual associar um evento; fica em log e métrica | `ARCHITECTURE.md` §15 |
+| **F9** hot wallet sem backpressure | ➖ aceito | Limitação conhecida; próximo passo seria *load shedding* com 503 | `ARCHITECTURE.md` §15 |
+
+**Verificação manual contra o compose (3 instâncias), 2026-10-30:**
+- BET com `playerId` e `walletId` em maiúsculas → 201; o mesmo pedido em minúsculas → 200 (replay).
+- WIN de `999999999999999.99` → 422 `BALANCE_LIMIT_EXCEEDED`, e a BET seguinte na mesma wallet → 201.
+- `provider-b` usando a mesma string de key de `provider-a` → 201, sem colisão.
+- Reconciliação da wallet: `consistent: true`, diferença `0.00`.
